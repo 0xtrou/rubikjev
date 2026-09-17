@@ -14,6 +14,11 @@
 [![Vercel](https://img.shields.io/badge/deployed_on-Vercel-000?style=flat-square&logo=vercel)](https://vercel.com)
 [![Compliance](https://img.shields.io/badge/MCA-compliance_mapped-emerald?style=flat-square)](./COMPLIANCE.md)
 
+[![GitHub](https://img.shields.io/badge/GitHub-0xtrou-181717?style=for-the-badge&logo=github)](https://github.com/0xtrou)
+[![X](https://img.shields.io/badge/@__trou3-follow-black?style=for-the-badge&logo=x)](https://x.com/_trou3)
+[![GitHub Followers](https://img.shields.io/github/followers/0xtrou?style=flat-square&label=followers)](https://github.com/0xtrou)
+[![Stars](https://img.shields.io/github/stars/0xtrou/rubikjev?style=flat-square&label=stars)](https://github.com/0xtrou/rubikjev/stargazers)
+
 *An AI-gamified twisty puzzle — scramble it, gamble it, watch Jev cook.* 🎰
 
 <img src="https://rubikjev.solo.engineer/opengraph-image" alt="Jev Solves The Cube" width="820"/>
@@ -139,6 +144,21 @@ src/
 - **Font vibes** from [Bruno Simon's portfolio](https://bruno-simon.com) (Amatic SC + Nunito).
 - **Judgments** by [Jev](https://www.typesafe.ai) via the TypeSafe System One API — probabilistic, for fun, never a fact.
 
+## 🫡 Author
+
+<div align="center">
+
+### **Tró** · *0xtrou*
+
+the one who taught Jev to cook 👨‍🍳
+
+[![GitHub](https://img.shields.io/badge/github-0xtrou-181717?style=for-the-badge&logo=github)](https://github.com/0xtrou)
+[![X](https://img.shields.io/badge/x-%40_trou3-black?style=for-the-badge&logo=x)](https://x.com/_trou3)
+
+**enjoyed the chaos? drop a ⭐ — Jev counts the stars too**
+
+</div>
+
 ## ⚠️ Disclaimer
 
 Fan-made demo, provided *as is*, for entertainment only. Not affiliated with
@@ -153,5 +173,7 @@ this site. See the in-app **Disclaimer**, **Privacy & Cookies**, and
 <div align="center">
 
 **🗿 scramble. cook. gamble. we move.**
+
+*— Tró · [0xtrou](https://github.com/0xtrou) · [@_trou3](https://x.com/_trou3)*
 
 </div>

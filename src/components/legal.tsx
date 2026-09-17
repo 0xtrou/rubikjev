@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
+import SocialLinks from "@/components/SocialLinks";
 import {
   Dialog,
   DialogContent,
@@ -276,9 +277,10 @@ export default function LegalChrome({ compact = false }: { compact?: boolean }) 
               </Button>
             }
           />
-          <span className="ml-2 text-[10px] text-muted-foreground/60">
-            © 2026 rubikjev · fan-made, not affiliated with Rubik&apos;s Brand Ltd · AI output may be
-            inaccurate
+          <span className="ml-2 flex items-center gap-2 text-[10px] text-muted-foreground/60">
+            <span>© 2026 rubikjev · crafted by</span>
+            <SocialLinks />
+            <span>· fan-made, AI output may be inaccurate</span>
           </span>
         </nav>
       </footer>

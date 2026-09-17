@@ -46,8 +46,8 @@ export const metadata: Metadata = {
     "speedcube",
     "gamification",
   ],
-  authors: [{ name: "khangtd09" }],
-  creator: "khangtd09",
+  authors: [{ name: "Tró · 0xtrou", url: "https://github.com/0xtrou" }],
+  creator: "Tró · 0xtrou",
   category: "games",
   alternates: { canonical: "/" },
   openGraph: {
@@ -68,6 +68,8 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: "summary_large_image",
+    site: "@_trou3",
+    creator: "@_trou3",
     title: `${SITE_NAME} — AI-Gamified Rubik's Cube Challenge`,
     description: DESCRIPTION,
     images: ["/opengraph-image"],
@@ -102,6 +104,12 @@ const jsonLd = {
   description: DESCRIPTION,
   offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
   isAccessibleForFree: true,
+  author: {
+    "@type": "Person",
+    name: "Tró · 0xtrou",
+    url: "https://github.com/0xtrou",
+    sameAs: ["https://github.com/0xtrou", "https://x.com/_trou3"],
+  },
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

@@ -40,5 +40,17 @@
     "tailwindcss": "^4",
     "typescript": "^5"
   },
-  "packageManager": "pnpm@9.12.0"
+  "packageManager": "pnpm@9.12.0",
+  "author": {
+    "name": "Tró · 0xtrou",
+    "url": "https://github.com/0xtrou"
+  },
+  "homepage": "https://rubikjev.solo.engineer",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/0xtrou/rubikjev.git"
+  },
+  "bugs": {
+    "url": "https://github.com/0xtrou/rubikjev/issues"
+  }
 }

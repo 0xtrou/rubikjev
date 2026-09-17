@@ -18,6 +18,8 @@ import type { CubeApi } from "@/components/cube/RubiksCube";
 import LegalChrome from "@/components/legal";
 import Logo from "@/components/Logo";
 import SafeBoundary from "@/components/ErrorBoundary";
+import { initSfx, setSfxMuted, sfx } from "@/lib/sfx";
+import SocialLinks from "@/components/SocialLinks";
 
 const CubeStage = dynamic(() => import("@/components/cube/CubeStage"), {
   ssr: false,
@@ -132,16 +134,44 @@ export default function Home() {
   const [scrambleLen, setScrambleLen] = useState(0);
   const [hype, setHype] = useState(HYPE_LINES[0]);
   const [tab, setTab] = useState("play");
-  const [turn, setTurn] = useState<{ i: number; n: number } | null>(null);
+  const [turn, setTurn] = useState<number | null>(null);
   const [customTurns, setCustomTurns] = useState(25);
   const [gamble, setGamble] = useState<Gamble | null>(null);
   const [solvedStats, setSolvedStats] = useState<{ solveMs: number; moves: number; tokens: number } | null>(null);
+  const [muted, setMuted] = useState(false);
 
   const { xp, solves, badges, bench, addXp, recordSolve, awardBadge, addBench } = useGame();
   const { rank, next } = rankFor(xp);
 
   const say = useCallback((text: string) => {
     setFeed((f) => [{ id: ++feedId, text }, ...f].slice(0, 12));
+  }, []);
+
+  // Audio: unlock the context on the first user gesture.
+  useEffect(() => {
+    const unlock = () => initSfx();
+    window.addEventListener("pointerdown", unlock, { once: true });
+    try {
+      setSfxMuted(localStorage.getItem("jev-muted") === "1");
+      setMuted(localStorage.getItem("jev-muted") === "1");
+    } catch {
+      // ignore
+    }
+    return () => window.removeEventListener("pointerdown", unlock);
+  }, []);
+
+  const toggleMute = useCallback(() => {
+    initSfx();
+    setMuted((m) => {
+      const next = !m;
+      setSfxMuted(next);
+      try {
+        localStorage.setItem("jev-muted", next ? "1" : "0");
+      } catch {
+        // ignore
+      }
+      return next;
+    });
   }, []);
 
   useEffect(() => {
@@ -156,6 +186,7 @@ export default function Home() {
   useEffect(() => {
     if (gamble?.stage !== "spinning") return;
     const iv = setInterval(() => {
+      sfx.spinTick();
       setGamble((g) => (g ? { ...g, reels: [randReel(), randReel(), randReel()] } : g));
     }, 90);
     const stop = setTimeout(() => {
@@ -164,12 +195,15 @@ export default function Home() {
       const won = gambleBaseRef.current * out.mult;
       addXp(won);
       if (out.mult === 0) {
+        sfx.bust();
         say(`💀 gambled ${gambleBaseRef.current} XP and LOST IT ALL. bold.`);
         toast("BUST 💀 the house always wins");
       } else {
+        sfx.coins();
         say(`🎰 slot says ×${out.mult} → +${won} XP!`);
         if (out.mult >= 3) {
           toast(`🎰 ×${out.mult} MULTIPLIER!!! +${won} XP 🤑`);
+          sfx.fanfare();
           confetti({ particleCount: 220, spread: 130, origin: { y: 0.6 }, zIndex: 95 });
         }
       }
@@ -191,23 +225,28 @@ export default function Home() {
 
   const bankIt = () => {
     if (!gamble) return;
+    sfx.coins();
     addXp(gamble.base);
     say(`🏦 banked ${gamble.base} XP. sensible.`);
     setGamble(null);
   };
 
   const gambleIt = () => {
+    sfx.click();
     setGamble((g) => (g ? { ...g, stage: "spinning" } : g));
   };
 
   const collectGamble = () => {
     if (!gamble) return;
+    sfx.click();
     if (gamble.mult > 0) say(`🧾 collected +${gamble.base * gamble.mult} XP. we move.`);
     setGamble(null);
   };
 
   const scramble = useCallback(() => {
     if (locked || !cubeRef.current) return;
+    initSfx();
+    sfx.whoosh();
     const moves = randomScramble(SCRAMBLE_PRESETS[preset].moves);
     historyRef.current = moves;
     setScrambleLen(moves.length);
@@ -233,6 +272,7 @@ export default function Home() {
     celebrateRef.current = true;
     solveStartRef.current = Date.now();
     metaRef.current = null;
+    initSfx();
     say("waking Jev up… ☕");
 
     try {
@@ -259,13 +299,15 @@ export default function Home() {
           const m = payload as Meta;
           metaRef.current = m;
           setMeta(m);
+          sfx.verdict();
           say(`${m.tierEmoji} JEV VERDICT: ${m.tierLabel} — ${"⭐".repeat(m.stars)}`);
           say(m.roast);
           if (m.tokens > 0) say(`🎫 ${m.tokens} tokens burned by the Jev engine`);
           if (m.tier === "GIGACHAD_SCRAMBLE") awardBadge("gigachad_scramble");
         } else if (event === "move") {
+          sfx.tick(payload.i);
           cubeRef.current?.enqueue([payload.move], "slow");
-          setTurn({ i: payload.i + 1, n: payload.n });
+          setTurn(payload.i + 1);
         } else if (event === "done") {
           const firstEver = solves === 0;
           const scrambleMoves = historyRef.current.length;
@@ -319,6 +361,7 @@ export default function Home() {
         }
         if (celebrateRef.current) {
           celebrateRef.current = false;
+          sfx.fanfare();
           fireVictory();
           cubeRef.current?.celebrate();
         }
@@ -354,6 +397,8 @@ export default function Home() {
   const manualTurn = useCallback(
     (move: Move) => {
       if (locked) return;
+      initSfx();
+      sfx.tick();
       pushTurns([move]);
     },
     [locked, pushTurns]
@@ -361,6 +406,8 @@ export default function Home() {
 
   const unleashTurns = useCallback(() => {
     if (locked) return;
+    initSfx();
+    sfx.whoosh();
     const room = MAX_TURNS - historyRef.current.length;
     if (room <= 0) {
       toast("5000 turns is the universe's limit 🌌");
@@ -407,6 +454,16 @@ export default function Home() {
             >
               experimental · ai
             </Badge>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 w-7 rounded-full p-0 text-sm"
+              onClick={toggleMute}
+              title={muted ? "unmute sounds" : "mute sounds"}
+            >
+              {muted ? "🔇" : "🔊"}
+            </Button>
+            <SocialLinks />
           </div>
         </header>
 
@@ -468,11 +525,21 @@ export default function Home() {
                 </div>
               )}
               {/* turns counter — only while Jev is solving */}
-              {phase === "solving" && turn && (
+              {phase === "solving" && turn !== null && (
                 <div className="pointer-events-none absolute bottom-2 left-2 z-10 rounded-md bg-black/70 px-2.5 py-0.5 font-mono text-[11px] font-bold text-emerald-300 backdrop-blur">
-                  TURN {turn.i}/{turn.n}
+                  TURN {turn}
                 </div>
               )}
+              {/* reset — lives with the cube it resurrects */}
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={reset}
+                disabled={locked}
+                className="absolute bottom-2 right-2 z-20 h-7 rounded-md bg-black/70 px-2.5 font-mono text-[11px] font-bold text-rose-300 backdrop-blur hover:bg-black/80 hover:text-rose-200"
+              >
+                🚿 reset
+              </Button>
 
               {/* JEV'S GAMBIT — double or nothing */}
               {gamble && (
@@ -555,8 +622,8 @@ export default function Home() {
                   <CardHeader className="pb-2 pt-3">
                     <CardTitle className="font-heading text-xl">🎮 your move, human</CardTitle>
                   </CardHeader>
-                  <CardContent className="flex flex-col gap-3">
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                <CardContent className="flex flex-col gap-3 px-5 py-4">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
                       {SCRAMBLE_PRESETS.map((p, i) => (
                         <Button
                           key={p.label}
@@ -624,9 +691,6 @@ export default function Home() {
                         </Button>
                       </div>
                     </div>
-                    <Button size="sm" variant="ghost" onClick={reset} disabled={locked} className="h-8">
-                      🚿 reset cube
-                    </Button>
                   </CardContent>
                 </Card>
               </TabsContent>
@@ -762,7 +826,11 @@ export default function Home() {
                   </p>
                   <div className="mt-1.5 flex flex-wrap gap-1.5">
                     <Badge variant="secondary">
-                      {gamble ? `${gamble.base} XP in the pot 🎰` : `+${meta.xp} XP banked`}
+                      {gamble
+                        ? `${gamble.base} XP in the pot 🎰`
+                        : phase === "solved"
+                          ? `+${meta.xp} XP banked`
+                          : `+${meta.xp} XP on the line`}
                     </Badge>
                     {meta.chaos && <Badge variant="secondary">certified chaos 🌪️</Badge>}
                   </div>
