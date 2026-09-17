@@ -296,14 +296,9 @@ export default function Home() {
       const handle = (event: string, data: string) => {
         const payload = JSON.parse(data);
         if (event === "meta") {
-          const m = payload as Meta;
-          metaRef.current = m;
-          setMeta(m);
-          sfx.verdict();
-          say(`${m.tierEmoji} JEV VERDICT: ${m.tierLabel} — ${"⭐".repeat(m.stars)}`);
-          say(m.roast);
-          if (m.tokens > 0) say(`🎫 ${m.tokens} tokens burned by the Jev engine`);
-          if (m.tier === "GIGACHAD_SCRAMBLE") awardBadge("gigachad_scramble");
+          // Verdict is sealed here but only revealed once the cube animation
+          // settles — no spoilers mid-solve.
+          metaRef.current = payload as Meta;
         } else if (event === "move") {
           sfx.tick(payload.i);
           cubeRef.current?.enqueue([payload.move], "slow");
@@ -358,6 +353,13 @@ export default function Home() {
             xp: m.xp,
           });
           setSolvedStats({ solveMs, moves: m.solutionLength, tokens: m.tokens });
+          // Reveal the sealed verdict now that the cube is visibly solved.
+          setMeta(m);
+          sfx.verdict();
+          say(`${m.tierEmoji} JEV VERDICT: ${m.tierLabel} — ${"⭐".repeat(m.stars)}`);
+          say(m.roast);
+          if (m.tokens > 0) say(`🎫 ${m.tokens} tokens burned by the Jev engine`);
+          if (m.tier === "GIGACHAD_SCRAMBLE") awardBadge("gigachad_scramble");
         }
         if (celebrateRef.current) {
           celebrateRef.current = false;

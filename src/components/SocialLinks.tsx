@@ -15,7 +15,7 @@ export function XIcon({ className }: { className?: string }) {
 }
 
 const socials = [
-  { href: "https://github.com/0xtrou", label: "@0xtrou on GitHub", Icon: GithubIcon },
+  { href: "https://github.com/0xtrou/rubikjev", label: "rubikjev on GitHub", Icon: GithubIcon },
   { href: "https://x.com/_trou3", label: "@_trou3 on X", Icon: XIcon },
 ];
 
