@@ -1,69 +1,804 @@
-import Image from "next/image";
+"use client";
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import dynamic from "next/dynamic";
+import { toast } from "sonner";
+import confetti from "canvas-confetti";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Progress } from "@/components/ui/progress";
+import { Separator } from "@/components/ui/separator";
+import { Input } from "@/components/ui/input";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { randomScramble, type Move } from "@/lib/cube";
+import { BADGES, HYPE_LINES, RANKS, TIERS, rankFor, type TierKey } from "@/lib/memes";
+import { useGame, type BenchEntry } from "@/lib/store";
+import type { CubeApi } from "@/components/cube/RubiksCube";
+import LegalChrome from "@/components/legal";
+import Logo from "@/components/Logo";
+import SafeBoundary from "@/components/ErrorBoundary";
+
+const CubeStage = dynamic(() => import("@/components/cube/CubeStage"), {
+  ssr: false,
+  loading: () => (
+    <div className="flex h-full items-center justify-center text-4xl animate-bounce">🧊</div>
+  ),
+});
+
+type Phase = "idle" | "scrambling" | "ready" | "solving" | "solved";
+type Meta = {
+  engine: string;
+  solutionLength: number;
+  tier: TierKey;
+  tierLabel: string;
+  tierEmoji: string;
+  stars: number;
+  roast: string;
+  chaos: boolean;
+  tokens: number;
+  xp: number;
+};
+type Gamble = {
+  base: number;
+  stage: "offer" | "spinning" | "result";
+  mult: number;
+  reels: string[];
+};
+
+const SCRAMBLE_PRESETS = [
+  { label: "Chill", moves: 10, emoji: "😌" },
+  { label: "Spicy", moves: 18, emoji: "🌶️" },
+  { label: "GIGACHAD", moves: 25, emoji: "🗿" },
+  { label: "UNHINGED", moves: 100, emoji: "🤯" },
+];
+
+const MANUAL_MOVES: Move[] = [
+  "U", "U'", "D", "D'", "L", "L'", "R", "R'", "F", "F'", "B", "B'",
+];
+
+const MAX_TURNS = 5000;
+const REEL_EMOJIS = ["🗿", "👨‍🍳", "😌", "🤖", "🌿", "⭐"];
+const randReel = () => REEL_EMOJIS[Math.floor(Math.random() * REEL_EMOJIS.length)];
+
+// Slot outcome: slightly house-favored, occasionally legendary.
+function spinOutcome(): { mult: number; reels: string[] } {
+  const r = Math.random();
+  if (r < 0.02) return { mult: 10, reels: ["⭐", "⭐", "⭐"] };
+  if (r < 0.06) return { mult: 5, reels: ["🗿", "🗿", "🗿"] };
+  if (r < 0.14) {
+    const e = randReel();
+    return { mult: 3, reels: [e, e, e] };
+  }
+  if (r < 0.34) {
+    const a = randReel();
+    let b = randReel();
+    while (b === a) b = randReel();
+    const pair = [a, a, b];
+    if (Math.random() < 0.5) pair.reverse();
+    return { mult: 2, reels: pair };
+  }
+  const s = [...REEL_EMOJIS].sort(() => Math.random() - 0.5);
+  return { mult: 0, reels: [s[0], s[1], s[2]] };
+}
+
+let feedId = 0;
+
+const fmtMs = (ms: number) => (ms >= 1000 ? `${(ms / 1000).toFixed(2)}s` : `${Math.round(ms)}ms`);
+
+// Full victory sequence: center burst + side cannons + star wave.
+function fireVictory() {
+  confetti({
+    particleCount: 150,
+    spread: 110,
+    startVelocity: 48,
+    origin: { y: 0.62 },
+    scalar: 1.05,
+    zIndex: 90,
+  });
+  const end = Date.now() + 1600;
+  const cannons = () => {
+    confetti({ particleCount: 3, angle: 60, spread: 55, origin: { x: 0, y: 0.72 }, zIndex: 90 });
+    confetti({ particleCount: 3, angle: 120, spread: 55, origin: { x: 1, y: 0.72 }, zIndex: 90 });
+    if (Date.now() < end) requestAnimationFrame(cannons);
+  };
+  cannons();
+  setTimeout(() => {
+    confetti({
+      particleCount: 70,
+      spread: 130,
+      startVelocity: 32,
+      shapes: ["star"],
+      scalar: 1.25,
+      origin: { y: 0.45 },
+      zIndex: 90,
+    });
+  }, 350);
+}
 
 export default function Home() {
+  const cubeRef = useRef<CubeApi>(null);
+  const historyRef = useRef<Move[]>([]);
+  const celebrateRef = useRef(false);
+  const solveStartRef = useRef(0);
+  const metaRef = useRef<Meta | null>(null);
+  const gambleBaseRef = useRef(0);
+
+  const [phase, setPhase] = useState<Phase>("idle");
+  const [resetKey, setResetKey] = useState(0);
+  const [preset, setPreset] = useState(1);
+  const [meta, setMeta] = useState<Meta | null>(null);
+  const [feed, setFeed] = useState<{ id: number; text: string }[]>([]);
+  const [scrambleLen, setScrambleLen] = useState(0);
+  const [hype, setHype] = useState(HYPE_LINES[0]);
+  const [tab, setTab] = useState("play");
+  const [turn, setTurn] = useState<{ i: number; n: number } | null>(null);
+  const [customTurns, setCustomTurns] = useState(25);
+  const [gamble, setGamble] = useState<Gamble | null>(null);
+  const [solvedStats, setSolvedStats] = useState<{ solveMs: number; moves: number; tokens: number } | null>(null);
+
+  const { xp, solves, badges, bench, addXp, recordSolve, awardBadge, addBench } = useGame();
+  const { rank, next } = rankFor(xp);
+
+  const say = useCallback((text: string) => {
+    setFeed((f) => [{ id: ++feedId, text }, ...f].slice(0, 12));
+  }, []);
+
+  useEffect(() => {
+    if (phase !== "solving") return;
+    const t = setInterval(() => {
+      setHype(HYPE_LINES[Math.floor(Math.random() * HYPE_LINES.length)]);
+    }, 1400);
+    return () => clearInterval(t);
+  }, [phase]);
+
+  // Slot reels animation while gambling.
+  useEffect(() => {
+    if (gamble?.stage !== "spinning") return;
+    const iv = setInterval(() => {
+      setGamble((g) => (g ? { ...g, reels: [randReel(), randReel(), randReel()] } : g));
+    }, 90);
+    const stop = setTimeout(() => {
+      const out = spinOutcome();
+      setGamble((g) => (g ? { ...g, ...out, stage: "result" } : g));
+      const won = gambleBaseRef.current * out.mult;
+      addXp(won);
+      if (out.mult === 0) {
+        say(`💀 gambled ${gambleBaseRef.current} XP and LOST IT ALL. bold.`);
+        toast("BUST 💀 the house always wins");
+      } else {
+        say(`🎰 slot says ×${out.mult} → +${won} XP!`);
+        if (out.mult >= 3) {
+          toast(`🎰 ×${out.mult} MULTIPLIER!!! +${won} XP 🤑`);
+          confetti({ particleCount: 220, spread: 130, origin: { y: 0.6 }, zIndex: 95 });
+        }
+      }
+    }, 1700);
+    return () => {
+      clearInterval(iv);
+      clearTimeout(stop);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gamble?.stage]);
+
+  const busy = phase === "scrambling" || phase === "solving";
+  const locked = busy || gamble !== null;
+
+  const beginGamble = (base: number) => {
+    gambleBaseRef.current = base;
+    setGamble({ base, stage: "offer", mult: 1, reels: [randReel(), randReel(), randReel()] });
+  };
+
+  const bankIt = () => {
+    if (!gamble) return;
+    addXp(gamble.base);
+    say(`🏦 banked ${gamble.base} XP. sensible.`);
+    setGamble(null);
+  };
+
+  const gambleIt = () => {
+    setGamble((g) => (g ? { ...g, stage: "spinning" } : g));
+  };
+
+  const collectGamble = () => {
+    if (!gamble) return;
+    if (gamble.mult > 0) say(`🧾 collected +${gamble.base * gamble.mult} XP. we move.`);
+    setGamble(null);
+  };
+
+  const scramble = useCallback(() => {
+    if (locked || !cubeRef.current) return;
+    const moves = randomScramble(SCRAMBLE_PRESETS[preset].moves);
+    historyRef.current = moves;
+    setScrambleLen(moves.length);
+    setMeta(null);
+    setTurn(null);
+    setSolvedStats(null);
+    setPhase("scrambling");
+    say(`scrambling with ${moves.length} moves of pure chaos…`);
+    cubeRef.current.enqueue(moves, "fast");
+    cubeRef.current.onSettled(() => {
+      setPhase("ready");
+      say("scramble locked in. yo @Jev, cook this 🧑‍🍳");
+    });
+  }, [locked, preset, say]);
+
+  const solve = useCallback(async () => {
+    if (locked || !cubeRef.current) return;
+    if (historyRef.current.length === 0) {
+      toast("the cube is already solved, genius 😎");
+      return;
+    }
+    setPhase("solving");
+    celebrateRef.current = true;
+    solveStartRef.current = Date.now();
+    metaRef.current = null;
+    say("waking Jev up… ☕");
+
+    try {
+      const res = await fetch("/api/solve", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ history: historyRef.current }),
+      });
+      if (!res.ok || !res.body) {
+        const err = await res.json().catch(() => ({}));
+        toast(err.error ?? "Jev tripped on a LAN cable 🙃");
+        celebrateRef.current = false;
+        setPhase("ready");
+        return;
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      const handle = (event: string, data: string) => {
+        const payload = JSON.parse(data);
+        if (event === "meta") {
+          const m = payload as Meta;
+          metaRef.current = m;
+          setMeta(m);
+          say(`${m.tierEmoji} JEV VERDICT: ${m.tierLabel} — ${"⭐".repeat(m.stars)}`);
+          say(m.roast);
+          if (m.tokens > 0) say(`🎫 ${m.tokens} tokens burned by the Jev engine`);
+          if (m.tier === "GIGACHAD_SCRAMBLE") awardBadge("gigachad_scramble");
+        } else if (event === "move") {
+          cubeRef.current?.enqueue([payload.move], "slow");
+          setTurn({ i: payload.i + 1, n: payload.n });
+        } else if (event === "done") {
+          const firstEver = solves === 0;
+          const scrambleMoves = historyRef.current.length;
+          recordSolve(scrambleMoves);
+          if (firstEver) awardBadge("first_blood");
+          if (scrambleMoves >= 25) awardBadge("chaos_agent");
+          awardBadge("speedrun");
+          if (useGame.getState().xp >= RANKS[RANKS.length - 1].minXp) awardBadge("sigma");
+          historyRef.current = [];
+          setScrambleLen(0);
+          // Gamble offer is staged now but only presented after the cube
+          // animation settles (see onSettled).
+          gambleBaseRef.current = payload.xp;
+          say(`run solved 🧾 +${payload.xp} XP on the table — bank it or gamble?`);
+        } else if (event === "error") {
+          toast(payload.message);
+          celebrateRef.current = false;
+          setPhase("ready");
+        }
+      };
+
+      // Parse the SSE stream incrementally.
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop() ?? "";
+        for (const part of parts) {
+          const lines = part.split("\n");
+          const evLine = lines.find((l) => l.startsWith("event: "));
+          const dataLine = lines.find((l) => l.startsWith("data: "));
+          if (evLine && dataLine) handle(evLine.slice(7), dataLine.slice(6));
+        }
+      }
+
+      cubeRef.current.onSettled(() => {
+        setPhase("solved");
+        const m = metaRef.current;
+        if (m) {
+          const solveMs = Date.now() - solveStartRef.current;
+          addBench({
+            at: Date.now(),
+            moves: m.solutionLength,
+            stars: m.stars,
+            tokens: m.tokens,
+            solveMs,
+            xp: m.xp,
+          });
+          setSolvedStats({ solveMs, moves: m.solutionLength, tokens: m.tokens });
+        }
+        if (celebrateRef.current) {
+          celebrateRef.current = false;
+          fireVictory();
+          cubeRef.current?.celebrate();
+        }
+        setTab("stats");
+        // Present the gamble only after the victory spin has played out.
+        setTimeout(() => beginGamble(gambleBaseRef.current), 2400);
+      });
+    } catch {
+      toast("connection to Jev lost mid-cook 📡");
+      celebrateRef.current = false;
+      setPhase("ready");
+    }
+  }, [locked, say, addXp, recordSolve, awardBadge, addBench, solves]);
+
+  const pushTurns = useCallback(
+    (moves: Move[]) => {
+      if (busy || !cubeRef.current) return;
+      const room = MAX_TURNS - historyRef.current.length;
+      if (room <= 0) {
+        toast("5000 turns is the universe's limit 🌌");
+        return;
+      }
+      const applied = moves.slice(0, room);
+      historyRef.current.push(...applied);
+      setScrambleLen(historyRef.current.length);
+      setMeta(null);
+      if (phase === "solved" || phase === "idle") setPhase("ready");
+      cubeRef.current.enqueue(applied, "fast");
+    },
+    [busy, phase]
+  );
+
+  const manualTurn = useCallback(
+    (move: Move) => {
+      if (locked) return;
+      pushTurns([move]);
+    },
+    [locked, pushTurns]
+  );
+
+  const unleashTurns = useCallback(() => {
+    if (locked) return;
+    const room = MAX_TURNS - historyRef.current.length;
+    if (room <= 0) {
+      toast("5000 turns is the universe's limit 🌌");
+      return;
+    }
+    const n = Math.max(1, Math.min(Math.floor(customTurns) || 0, room, 4900));
+    pushTurns(randomScramble(n));
+    say(`human unleashed ${n} more turns 🌪️`);
+  }, [locked, customTurns, pushTurns, say]);
+
+  const reset = useCallback(() => {
+    if (locked) return;
+    historyRef.current = [];
+    setScrambleLen(0);
+    setMeta(null);
+    setTurn(null);
+    setSolvedStats(null);
+    setPhase("idle");
+    setResetKey((k) => k + 1);
+    say("cube rehab complete. fresh start 💫");
+  }, [locked, say]);
+
+  const rankProgress = next ? ((xp - rank.minXp) / (next.minXp - rank.minXp)) * 100 : 100;
+  const latest = bench[0];
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
+    <div className="bg-background text-foreground lg:h-dvh lg:overflow-hidden flex flex-col">
+      <div className="mx-auto w-full max-w-7xl px-3 sm:px-6 py-3 flex flex-col flex-1 lg:min-h-0 gap-3">
+        {/* Header — compact single row */}
+        <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+          <h1 className="flex items-center gap-2 font-heading text-3xl sm:text-4xl font-bold tracking-wide leading-none">
+            <Logo className="h-9 w-9 drop-shadow-[0_0_14px_rgba(59,130,246,0.45)]" />
+            <span className="bg-gradient-to-r from-emerald-400 via-sky-400 to-fuchsia-500 bg-clip-text text-transparent">
+              JEV SOLVES THE CUBE
+            </span>
+            <span className="text-muted-foreground text-sm sm:text-base font-sans font-medium hidden sm:inline">
+              — you scramble, Jev™ cooks. no takebacks.
+            </span>
           </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
+          <div className="flex items-center gap-2">
+            <Badge
+              variant="outline"
+              className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground"
             >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+              experimental · ai
+            </Badge>
+          </div>
+        </header>
+
+        {/* HUD — ultra-slim single line */}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border bg-card/60 px-3 py-1 text-xs">
+          <span className="text-base">{rank.emoji}</span>
+          <span className="font-heading text-base leading-none">{rank.name}</span>
+          <Separator orientation="vertical" className="hidden h-4 sm:block" />
+          <div className="flex min-w-28 sm:min-w-48 flex-1 items-center gap-2">
+            <span className="text-[10px] text-muted-foreground">{xp} XP</span>
+            <Progress value={rankProgress} className="h-1 flex-1" />
+            <span className="text-[10px] text-muted-foreground">
+              {next ? `${next.minXp - xp} XP → ${next.name}` : "MAXED 🌿"}
+            </span>
+          </div>
+          <Separator orientation="vertical" className="hidden h-4 sm:block" />
+          <span className="text-[10px] text-muted-foreground">
+            <span className="font-black text-foreground">{solves}</span> 🧾 solves
+          </span>
+          <Separator orientation="vertical" className="hidden h-4 sm:block" />
+          <div className="flex gap-0.5">
+            {Object.entries(BADGES).map(([key, b]) => (
+              <span
+                key={key}
+                title={`${b.label}: ${b.desc}`}
+                className={`text-sm transition ${badges.includes(key as never) ? "" : "opacity-20 grayscale"}`}
+              >
+                {b.emoji}
+              </span>
+            ))}
+          </div>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+
+        {/* Main row: cube + right column */}
+        <div className="grid flex-1 lg:min-h-0 gap-3 lg:grid-cols-[1.2fr_1fr]">
+          {/* Cube — fills available height, never scrolls */}
+          <Card className={`overflow-hidden border-2 min-h-[300px] lg:min-h-0 ${phase === "scrambling" ? "cube-shake" : ""}`}>
+            <div className="relative h-full min-h-[300px] lg:min-h-0">
+              <CubeStage cubeRef={cubeRef} resetKey={resetKey} />
+              {phase === "solving" && (
+                <div className="pointer-events-none absolute inset-x-0 top-0 p-2 z-10">
+                  <div className="mx-auto w-fit animate-pulse rounded-full bg-black/70 px-3 py-1 text-xs font-bold text-emerald-300 backdrop-blur">
+                    🧠 {hype}
+                  </div>
+                </div>
+              )}
+              {phase === "solved" && !gamble && solvedStats && (
+                <div className="pointer-events-none absolute inset-x-0 top-0 p-2 z-10">
+                  <div className="victory-pop mx-auto w-fit rounded-xl border border-amber-400/50 bg-black/80 px-5 py-2.5 text-center backdrop-blur">
+                    <div className="font-heading text-2xl font-bold leading-none text-amber-300">
+                      ✅ SOLVED!
+                    </div>
+                    <div className="mt-1.5 flex items-center justify-center gap-3 font-mono text-[11px] text-muted-foreground">
+                      <span>⏱ {fmtMs(solvedStats.solveMs)}</span>
+                      <span>🔄 {solvedStats.moves} turns</span>
+                      <span>🎫 {solvedStats.tokens.toLocaleString()} tok</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+              {/* turns counter — only while Jev is solving */}
+              {phase === "solving" && turn && (
+                <div className="pointer-events-none absolute bottom-2 left-2 z-10 rounded-md bg-black/70 px-2.5 py-0.5 font-mono text-[11px] font-bold text-emerald-300 backdrop-blur">
+                  TURN {turn.i}/{turn.n}
+                </div>
+              )}
+
+              {/* JEV'S GAMBIT — double or nothing */}
+              {gamble && (
+                <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+                  <div className="w-full max-w-sm rounded-xl border-2 border-amber-400/60 bg-popover/95 p-4 text-center shadow-2xl animate-in fade-in zoom-in-90 duration-300">
+                    <div className="font-heading text-3xl font-bold text-amber-300">🎰 JEV&apos;S GAMBIT</div>
+                    {gamble.stage === "offer" && (
+                      <>
+                        <p className="mt-1.5 text-sm text-muted-foreground">
+                          run complete — <span className="font-bold text-foreground">+{gamble.base} XP</span> on
+                          the table. bank it, or let fate decide?
+                        </p>
+                        <div className="mt-3 flex justify-center gap-2">
+                          <Button variant="outline" size="sm" onClick={bankIt}>
+                            🏦 bank {gamble.base}
+                          </Button>
+                          <Button
+                            size="sm"
+                            onClick={gambleIt}
+                            className="bg-gradient-to-r from-amber-500 to-fuchsia-500 text-white hover:from-amber-600 hover:to-fuchsia-600"
+                          >
+                            🎲 double or nothing
+                          </Button>
+                        </div>
+                        <p className="mt-2 text-[10px] text-muted-foreground">
+                          ×2 common · ×3 rare · ×5 very rare · ×10 legendary · 💀 bust = nothing
+                        </p>
+                      </>
+                    )}
+                    {gamble.stage === "spinning" && (
+                      <>
+                        <div className="mt-1 flex justify-center gap-3 text-5xl">
+                          {gamble.reels.map((r, i) => (
+                            <span key={i} className="animate-pulse">
+                              {r}
+                            </span>
+                          ))}
+                        </div>
+                        <p className="mt-2 font-mono text-sm text-muted-foreground animate-pulse">spinning…</p>
+                      </>
+                    )}
+                    {gamble.stage === "result" && (
+                      <>
+                        <div className="mt-1 flex justify-center gap-3 text-5xl">
+                          {gamble.reels.map((r, i) => (
+                            <span key={i}>{r}</span>
+                          ))}
+                        </div>
+                        {gamble.mult === 0 ? (
+                          <p className="mt-2 font-heading text-3xl font-bold text-rose-400 animate-in fade-in zoom-in-90">
+                            💀 BUST!
+                          </p>
+                        ) : (
+                          <p className="mt-2 font-heading text-3xl font-bold text-emerald-300 animate-in fade-in zoom-in-90">
+                            ×{gamble.mult} → +{gamble.base * gamble.mult} XP 🤑
+                          </p>
+                        )}
+                        <Button size="sm" className="mt-3" onClick={collectGamble}>
+                          collect & continue
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          </Card>
+
+          {/* Right column: tabs (play/stats/about) + verdict pinned under the input */}
+          <div className="flex flex-col gap-3 lg:min-h-0">
+            <Tabs value={tab} onValueChange={setTab} className="flex flex-col flex-1 lg:min-h-0">
+              <TabsList className="grid w-full grid-cols-3 mb-2">
+                <TabsTrigger value="play">🎮 Play</TabsTrigger>
+                <TabsTrigger value="stats">📊 Stats</TabsTrigger>
+                <TabsTrigger value="about">🧠 About Jev</TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="play" className="mt-0 flex-1 lg:min-h-0 lg:overflow-y-auto">
+                <Card className="border-2">
+                  <CardHeader className="pb-2 pt-3">
+                    <CardTitle className="font-heading text-xl">🎮 your move, human</CardTitle>
+                  </CardHeader>
+                  <CardContent className="flex flex-col gap-3">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                      {SCRAMBLE_PRESETS.map((p, i) => (
+                        <Button
+                          key={p.label}
+                          size="sm"
+                          variant={preset === i ? "default" : "outline"}
+                          onClick={() => setPreset(i)}
+                          disabled={locked}
+                          className="text-xs"
+                        >
+                          {p.emoji} {p.label}
+                        </Button>
+                      ))}
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <Button onClick={scramble} disabled={locked} className="font-heading text-2xl h-10">
+                        🌪️ SCRAMBLE
+                      </Button>
+                      <Button
+                        onClick={solve}
+                        disabled={locked || phase === "idle"}
+                        className="font-heading text-2xl h-10 bg-gradient-to-r from-emerald-500 to-sky-500 text-white hover:from-emerald-600 hover:to-sky-600"
+                      >
+                        🤖 SOLVE WITH JEV
+                      </Button>
+                    </div>
+                    <div>
+                      <div className="mb-1 text-xs text-muted-foreground">
+                        hand-scramble — unlimited turns, as chaotic as you dare
+                      </div>
+                      <div className="grid grid-cols-6 gap-1">
+                        {MANUAL_MOVES.map((m) => (
+                          <Button
+                            key={m}
+                            size="sm"
+                            variant="secondary"
+                            className="px-0 font-mono text-[11px] h-8"
+                            disabled={locked}
+                            onClick={() => manualTurn(m)}
+                          >
+                            {m}
+                          </Button>
+                        ))}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="mb-1 text-xs text-muted-foreground">
+                        or unleash a custom number of turns (1–4900)
+                      </div>
+                      <div className="flex gap-2">
+                        <Input
+                          type="number"
+                          inputMode="numeric"
+                          min={1}
+                          max={4900}
+                          value={customTurns}
+                          onChange={(e) => setCustomTurns(Number(e.target.value))}
+                          className="font-mono text-sm h-9"
+                          disabled={locked}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") unleashTurns();
+                          }}
+                        />
+                        <Button variant="secondary" size="sm" className="h-9" onClick={unleashTurns} disabled={locked}>
+                          🌀 unleash
+                        </Button>
+                      </div>
+                    </div>
+                    <Button size="sm" variant="ghost" onClick={reset} disabled={locked} className="h-8">
+                      🚿 reset cube
+                    </Button>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+
+              <TabsContent value="stats" className="mt-0 flex-1 lg:min-h-0 lg:overflow-y-auto">
+                <Card className="border-2">
+                  <CardHeader className="pb-2 pt-3">
+                    <CardTitle className="font-heading text-xl">📊 JEV RUN STATS</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <SafeBoundary storageKey="jev-cube-game">
+                      {latest ? (
+                        <>
+                          <div className="grid grid-cols-2 gap-1.5">
+                            {[
+                              { label: "verdict", value: "⭐".repeat(latest.stars), emoji: "" },
+                              { label: "tokens burned", value: (latest.tokens ?? 0).toLocaleString(), emoji: "🎫" },
+                              { label: "run wall", value: fmtMs(latest.solveMs), emoji: "⏱️" },
+                              { label: "moves", value: String(latest.moves), emoji: "🔄" },
+                            ].map((s) => (
+                              <div key={s.label} className="rounded-md border bg-card px-2 py-1.5">
+                                <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{s.label}</div>
+                                <div className="font-mono text-xs font-bold truncate" title={s.value}>
+                                  {s.emoji} {s.value}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                          {bench.length > 1 && (
+                            <div className="mt-2 overflow-x-auto">
+                              <table className="w-full text-left font-mono text-[11px] whitespace-nowrap">
+                                <thead className="text-muted-foreground">
+                                  <tr>
+                                    <th className="pr-2 font-medium">time</th>
+                                    <th className="pr-2 font-medium">moves</th>
+                                    <th className="pr-2 font-medium">stars</th>
+                                    <th className="pr-2 font-medium">tokens</th>
+                                    <th className="pr-2 font-medium">wall</th>
+                                    <th className="font-medium">XP</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {bench.map((b: BenchEntry) => (
+                                    <tr key={b.at} className="border-t border-border/60">
+                                      <td className="pr-2 py-0.5">
+                                        {new Date(b.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                                      </td>
+                                      <td className="pr-2 py-0.5">{b.moves}</td>
+                                      <td className="pr-2 py-0.5">{"⭐".repeat(b.stars)}</td>
+                                      <td className="pr-2 py-0.5">{(b.tokens ?? 0).toLocaleString()}</td>
+                                      <td className="pr-2 py-0.5">{fmtMs(b.solveMs)}</td>
+                                      <td className="py-0.5">+{b.xp}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <p className="text-sm text-muted-foreground">
+                          no runs yet. make Jev cook to collect run stats ⏱️
+                        </p>
+                      )}
+                    </SafeBoundary>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+
+              <TabsContent value="about" className="mt-0 flex-1 lg:min-h-0 lg:overflow-y-auto">
+                <Card className="border-2">
+                  <CardHeader className="pb-2 pt-3">
+                    <CardTitle className="font-heading text-xl">🧠 Meet Jev, your cube&apos;s AI solver</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3 text-sm leading-relaxed text-muted-foreground">
+                    <div className="space-y-1">
+                      <h3 className="font-semibold text-foreground">Who&apos;s Jev?</h3>
+                      <p>
+                        Jev is rubikjev&apos;s resident AI solver persona. You wreck the cube — Jev
+                        reads the chaos, rates it, roasts it, then calmly cooks the solve while you
+                        watch.
+                      </p>
+                    </div>
+                    <div className="space-y-1">
+                      <h3 className="font-semibold text-foreground">What happens in a run</h3>
+                      <p>
+                        Jev receives your scramble (move sequences only — never anything personal)
+                        and returns a verdict: one of five meme tiers, a 1–5 star difficulty
+                        rating, and exactly one roast. Then the solution is streamed move-by-move.
+                        Every run meters the tokens it burned.
+                      </p>
+                    </div>
+                    <div className="space-y-1">
+                      <h3 className="font-semibold text-foreground">Reading the tiers</h3>
+                      <p>
+                        🗿 GIGACHAD SCRAMBLE · 👨‍🍳 CERTIFIED COOKER · 😐 CERTIFIED MID · 🤖 NPC
+                        ENERGY · 🌿 GO TOUCH GRASS. Stars scale with how brutal the undo is.
+                      </p>
+                    </div>
+                    <div className="space-y-1">
+                      <h3 className="font-semibold text-foreground">The gamble</h3>
+                      <p>
+                        After every solve, bank the XP or feed Jev&apos;s slot machine — double,
+                        triple, ×5, ×10… or nothing. House edge slightly favors Jev. Obviously.
+                      </p>
+                    </div>
+                    <div className="space-y-1">
+                      <h3 className="font-semibold text-foreground">The fine print</h3>
+                      <p>
+                        Judgments come from a third-party AI model and are probabilistic — for fun,
+                        not facts. Runs are rate-limited (12 per minute per visitor). The heavy
+                        lifting happens server-side; your browser only receives curated game
+                        events, never raw inference.
+                      </p>
+                    </div>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+            </Tabs>
+
+            {/* Verdict — pinned right under the human input */}
+            {meta ? (
+              <Card className="border-2 border-fuchsia-500/40 bg-fuchsia-500/5 animate-in fade-in zoom-in-95 duration-300">
+                <CardContent className="py-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className={`font-heading text-2xl ${TIERS[meta.tier].color}`}>
+                      {meta.tierEmoji} {meta.tierLabel}
+                    </span>
+                    <span className="text-amber-400">{"⭐".repeat(meta.stars)}</span>
+                  </div>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    &ldquo;{meta.roast}&rdquo; — Jev, probably
+                  </p>
+                  <div className="mt-1.5 flex flex-wrap gap-1.5">
+                    <Badge variant="secondary">
+                      {gamble ? `${gamble.base} XP in the pot 🎰` : `+${meta.xp} XP banked`}
+                    </Badge>
+                    {meta.chaos && <Badge variant="secondary">certified chaos 🌪️</Badge>}
+                  </div>
+                </CardContent>
+              </Card>
+            ) : null}
+          </div>
         </div>
-      </main>
+
+        {/* Feed — full-width bottom row */}
+        <Card className="lg:h-36 lg:min-h-[120px] flex-none">
+          <CardHeader className="pb-1 pt-2.5">
+            <CardTitle className="font-heading text-lg">💬 Jev live feed</CardTitle>
+          </CardHeader>
+          <CardContent className="lg:h-[calc(100%-2.4rem)] overflow-y-auto">
+            {feed.length === 0 ? (
+              <p className="text-sm text-muted-foreground">silence. the cube awaits its fate 🕯️</p>
+            ) : (
+              <ul className="space-y-1">
+                {feed.map((f) => (
+                  <li
+                    key={f.id}
+                    className="flex items-center gap-1.5 text-xs animate-in fade-in slide-in-from-top-1"
+                    title={f.text}
+                  >
+                    <span className="text-emerald-400">›</span>
+                    <span className="truncate">{f.text}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </CardContent>
+        </Card>
+
+        <LegalChrome compact />
+      </div>
     </div>
   );
 }
