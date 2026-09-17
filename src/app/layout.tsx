@@ -46,8 +46,8 @@ export const metadata: Metadata = {
     "speedcube",
     "gamification",
   ],
-  authors: [{ name: "Tró · 0xtrou", url: "https://github.com/0xtrou" }],
-  creator: "Tró · 0xtrou",
+  authors: [{ name: "Trou · 0xtrou", url: "https://github.com/0xtrou" }],
+  creator: "Trou · 0xtrou",
   category: "games",
   alternates: { canonical: "/" },
   openGraph: {
@@ -106,7 +106,7 @@ const jsonLd = {
   isAccessibleForFree: true,
   author: {
     "@type": "Person",
-    name: "Tró · 0xtrou",
+    name: "Trou · 0xtrou",
     url: "https://github.com/0xtrou",
     sameAs: ["https://github.com/0xtrou", "https://x.com/_trou3"],
   },

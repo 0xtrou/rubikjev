@@ -148,7 +148,7 @@ src/
 
 <div align="center">
 
-### **Tró** · *0xtrou*
+### **Trou** · *0xtrou*
 
 the one who taught Jev to cook 👨‍🍳
 
@@ -174,6 +174,6 @@ this site. See the in-app **Disclaimer**, **Privacy & Cookies**, and
 
 **🗿 scramble. cook. gamble. we move.**
 
-*— Tró · [0xtrou](https://github.com/0xtrou) · [@_trou3](https://x.com/_trou3)*
+*— Trou · [0xtrou](https://github.com/0xtrou) · [@_trou3](https://x.com/_trou3)*
 
 </div>
