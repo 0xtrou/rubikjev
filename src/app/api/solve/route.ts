@@ -168,7 +168,11 @@ export async function POST(req: NextRequest) {
   const solution = solveFor(history);
   const judgement = await judgeScramble(history);
   const xp = xpFor(judgement, solution.length);
-  // Curated gameplay events only — no provider, model, or latency metadata.
+  // Pace the solve so it reads like the AI is thinking move-by-move, with a
+  // time budget so even monster scrambles finish inside the function limit.
+  // The client matches its animation to this exact pace.
+  const perMove = Math.max(5, Math.min(90, Math.min(260, 36000 / solution.length)));
+  // Curated gameplay events only — no provider, model, or timing metadata.
   const meta = {
     engine: ENGINE,
     solutionLength: solution.length,
@@ -179,6 +183,7 @@ export async function POST(req: NextRequest) {
     roast: judgement.roast,
     chaos: judgement.chaos,
     tokens: judgement.tokens,
+    paceMs: Math.round(perMove),
     xp,
   };
 
@@ -193,11 +198,6 @@ export async function POST(req: NextRequest) {
         send("meta", meta);
         await sleep(600);
 
-        // Pace the solve so it reads like the AI is thinking move-by-move,
-        // with a time budget so even monster scrambles finish inside the
-        // function limit.
-        const ideal = Math.max(90, Math.min(260, 3600 / solution.length));
-        const perMove = Math.max(5, Math.min(ideal, 45000 / solution.length));
         for (let i = 0; i < solution.length; i++) {
           send("move", { move: solution[i], i, n: solution.length });
           await sleep(perMove);

@@ -39,6 +39,7 @@ type Meta = {
   roast: string;
   chaos: boolean;
   tokens: number;
+  paceMs: number;
   xp: number;
 };
 type Gamble = {
@@ -274,9 +275,11 @@ export default function Home() {
     solveStartRef.current = Date.now();
     metaRef.current = null;
     initSfx();
-    // The turn counter is driven by the cube's animation, not the network.
+    // The turn counter and the replay are driven by the cube's animation,
+    // not the network: the stream buffers, the cube pulls when free.
     cubeRef.current.resetTurns();
     cubeRef.current.onTurn((i) => setTurn(i));
+    cubeRef.current.clearPending();
     setTurn(null);
     say("waking Jev up… ☕");
 
@@ -303,10 +306,13 @@ export default function Home() {
         if (event === "meta") {
           // Verdict is sealed here but only revealed once the cube animation
           // settles — no spoilers mid-solve.
-          metaRef.current = payload as Meta;
+          const m = payload as Meta;
+          metaRef.current = m;
+          cubeRef.current?.setPace(m.paceMs);
         } else if (event === "move") {
-          sfx.tick(payload.i);
-          cubeRef.current?.enqueue([payload.move], "slow");
+          // Buffered, then animated the moment the cube is free — the tick
+          // fires with the actual turn (see RubiksCube.startMove).
+          cubeRef.current?.feedMove(payload.move);
         } else if (event === "done") {
           const firstEver = solves === 0;
           const scrambleMoves = historyRef.current.length;
@@ -431,6 +437,7 @@ export default function Home() {
     setMeta(null);
     setTurn(null);
     setSolvedStats(null);
+    cubeRef.current?.clearPending();
     setPhase("idle");
     setResetKey((k) => k + 1);
     say("cube rehab complete. fresh start 💫");

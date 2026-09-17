@@ -9,12 +9,19 @@ import {
   gutterMaterial,
   stickerTexture,
 } from "./textures";
+import { sfx } from "@/lib/sfx";
 import type { Move } from "@/lib/cube";
 
 export type CubeSpeed = "fast" | "slow";
 
 export type CubeApi = {
   enqueue: (moves: Move[], speed?: CubeSpeed) => void;
+  /** stream-fed turn: buffered, animated the moment the cube is free */
+  feedMove: (move: Move) => void;
+  /** match the animation duration to the stream pacing (ms per turn) */
+  setPace: (ms: number) => void;
+  /** drop any buffered turns (reset / new solve) */
+  clearPending: () => void;
   isBusy: () => boolean;
   onSettled: (cb: (() => void) | null) => void;
   celebrate: () => void;
@@ -65,6 +72,8 @@ type Anim = {
 export default function RubiksCube({ ref, resetKey = 0 }: Props) {
   const rootRef = useRef<THREE.Group>(null);
   const queue = useRef<{ move: Move; speed: CubeSpeed }[]>([]);
+  const pending = useRef<{ move: Move; speed: CubeSpeed }[]>([]);
+  const paceMs = useRef(0);
   const anim = useRef<Anim | null>(null);
   const settledCb = useRef<(() => void) | null>(null);
   const victory = useRef<{ t: number; dur: number } | null>(null);
@@ -84,7 +93,16 @@ export default function RubiksCube({ ref, resetKey = 0 }: Props) {
     enqueue: (moves, speed = "slow") => {
       moves.forEach((move) => queue.current.push({ move, speed }));
     },
-    isBusy: () => anim.current !== null || queue.current.length > 0,
+    feedMove: (move) => {
+      pending.current.push({ move, speed: "slow" });
+    },
+    setPace: (ms) => {
+      paceMs.current = ms;
+    },
+    clearPending: () => {
+      pending.current = [];
+    },
+    isBusy: () => anim.current !== null || queue.current.length > 0 || pending.current.length > 0,
     onSettled: (cb) => {
       settledCb.current = cb;
     },
@@ -119,16 +137,22 @@ export default function RubiksCube({ ref, resetKey = 0 }: Props) {
       if (Math.round(coord) === spec.layer) selected.push(child);
     });
     selected.forEach((c) => pivot.attach(c));
-    // The counter tracks the cube, not the network: fires as each turn starts.
+    // The counter and the tick are tied to the cube actually turning.
     turnCounter.current += 1;
+    sfx.tick(turnCounter.current);
     turnCb.current?.(turnCounter.current);
+    // Match the animation duration to the stream pacing for live replay.
+    const paced =
+      speed === "slow" && paceMs.current > 0
+        ? Math.min(0.26, Math.max(0.06, paceMs.current / 1000))
+        : DURATIONS[speed];
     anim.current = {
       pivot,
       cubies: selected,
       axis: spec.axis,
       target: angle,
       elapsed: 0,
-      duration: DURATIONS[speed] * factor,
+      duration: paced * factor,
     };
   };
 
@@ -178,13 +202,20 @@ export default function RubiksCube({ ref, resetKey = 0 }: Props) {
       const t = Math.min(1, a.elapsed / a.duration);
       a.pivot.rotation[a.axis] = a.target * easeInOut(t);
       if (t >= 1) finalize();
-    } else if (queue.current.length > 0) {
-      const { move, speed } = queue.current.shift()!;
-      startMove(move, speed);
-    } else if (settledCb.current && !victory.current) {
-      const cb = settledCb.current;
-      settledCb.current = null;
-      cb();
+    } else {
+      // The cube is the clock: pull exactly one streamed turn when free.
+      if (pending.current.length > 0) {
+        const next = pending.current.shift()!;
+        queue.current.push(next);
+      }
+      if (queue.current.length > 0) {
+        const { move, speed } = queue.current.shift()!;
+        startMove(move, speed);
+      } else if (settledCb.current && !victory.current && pending.current.length === 0) {
+        const cb = settledCb.current;
+        settledCb.current = null;
+        cb();
+      }
     }
   });
 
