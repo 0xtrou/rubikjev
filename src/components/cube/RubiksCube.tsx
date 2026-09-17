@@ -18,6 +18,10 @@ export type CubeApi = {
   isBusy: () => boolean;
   onSettled: (cb: (() => void) | null) => void;
   celebrate: () => void;
+  /** zero the animated-turn counter (call when starting a new solve) */
+  resetTurns: () => void;
+  /** fires with the 1-based index of each turn as it starts animating */
+  onTurn: (cb: ((i: number) => void) | null) => void;
 };
 
 type Props = { ref?: React.Ref<CubeApi>; resetKey?: number };
@@ -64,6 +68,8 @@ export default function RubiksCube({ ref, resetKey = 0 }: Props) {
   const anim = useRef<Anim | null>(null);
   const settledCb = useRef<(() => void) | null>(null);
   const victory = useRef<{ t: number; dur: number } | null>(null);
+  const turnCb = useRef<((i: number) => void) | null>(null);
+  const turnCounter = useRef(0);
 
   const cubies = useMemo(() => {
     const list: [number, number, number][] = [];
@@ -84,6 +90,12 @@ export default function RubiksCube({ ref, resetKey = 0 }: Props) {
     },
     celebrate: () => {
       victory.current = { t: 0, dur: 1.5 };
+    },
+    resetTurns: () => {
+      turnCounter.current = 0;
+    },
+    onTurn: (cb) => {
+      turnCb.current = cb;
     },
   }));
 
@@ -107,6 +119,9 @@ export default function RubiksCube({ ref, resetKey = 0 }: Props) {
       if (Math.round(coord) === spec.layer) selected.push(child);
     });
     selected.forEach((c) => pivot.attach(c));
+    // The counter tracks the cube, not the network: fires as each turn starts.
+    turnCounter.current += 1;
+    turnCb.current?.(turnCounter.current);
     anim.current = {
       pivot,
       cubies: selected,

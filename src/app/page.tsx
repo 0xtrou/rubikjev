@@ -254,6 +254,7 @@ export default function Home() {
     setTurn(null);
     setSolvedStats(null);
     setPhase("scrambling");
+    cubeRef.current.resetTurns();
     say(`scrambling with ${moves.length} moves of pure chaos…`);
     cubeRef.current.enqueue(moves, "fast");
     cubeRef.current.onSettled(() => {
@@ -273,6 +274,10 @@ export default function Home() {
     solveStartRef.current = Date.now();
     metaRef.current = null;
     initSfx();
+    // The turn counter is driven by the cube's animation, not the network.
+    cubeRef.current.resetTurns();
+    cubeRef.current.onTurn((i) => setTurn(i));
+    setTurn(null);
     say("waking Jev up… ☕");
 
     try {
@@ -302,7 +307,6 @@ export default function Home() {
         } else if (event === "move") {
           sfx.tick(payload.i);
           cubeRef.current?.enqueue([payload.move], "slow");
-          setTurn(payload.i + 1);
         } else if (event === "done") {
           const firstEver = solves === 0;
           const scrambleMoves = historyRef.current.length;
