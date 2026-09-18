@@ -50,7 +50,7 @@ server-only).
   `src/server/jev-engine.ts` (anti-corruption layer). Client code cannot import
   it (server-only module used exclusively by `app/api/solve/route.ts`).
 - **Client boundary:** SSE stream carries only curated events
-  (`meta`/`move`/`done`/`error`) signed `engine: "jev-stream/1"`, plus generic
+  (`meta`/`waypoint`/`move`/`done`/`error`) signed `engine: "jev-stream/1"`, plus generic
   token count. No questions, criteria, probabilities, confidence, usage
   breakdowns, model ids, or provider references.
 - **Bundle audit:** `grep -rli typesafe .next/static/` → empty. Server chunks

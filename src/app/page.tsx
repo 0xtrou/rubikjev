@@ -32,6 +32,8 @@ type Phase = "idle" | "scrambling" | "ready" | "solving" | "solved";
 type Meta = {
   engine: string;
   solutionLength: number;
+  tools: number;
+  superhuman: boolean;
   tier: TierKey;
   tierLabel: string;
   tierEmoji: string;
@@ -309,6 +311,9 @@ export default function Home() {
           const m = payload as Meta;
           metaRef.current = m;
           cubeRef.current?.setPace(m.paceMs);
+        } else if (event === "waypoint") {
+          // Jev chose this job mid-solve — narrate the pave-the-way moment.
+          say(`${payload.emoji} JEV: ${payload.feed}`);
         } else if (event === "move") {
           // Buffered, then animated the moment the cube is free — the tick
           // fires with the actual turn (see RubiksCube.startMove).
@@ -790,10 +795,14 @@ export default function Home() {
                     <div className="space-y-1">
                       <h3 className="font-semibold text-foreground">What happens in a run</h3>
                       <p>
-                        Jev receives your scramble (move sequences only — never anything personal)
-                        and returns a verdict: one of five meme tiers, a 1–5 star difficulty
-                        rating, and exactly one roast. Then the solution is streamed move-by-move.
-                        Every run meters the tokens it burned.
+                        Jev receives your scramble and the live cube state (facelets +
+                        progress — never anything personal) and paves the solve as an
+                        agent loop: every step it picks the next job from a toolbox —
+                        seat a corner, thread an edge, go superhuman — and the server
+                        executes exactly that job before feeding the updated state back.
+                        You get a verdict (one of five meme tiers, a 1–5 star rating,
+                        exactly one roast) and every move streams turn by turn. Every
+                        run meters the tokens it burned.
                       </p>
                     </div>
                     <div className="space-y-1">
@@ -845,6 +854,8 @@ export default function Home() {
                           ? `+${meta.xp} XP banked`
                           : `+${meta.xp} XP on the line`}
                     </Badge>
+                    {meta.tools > 0 && <Badge variant="secondary">{meta.tools} tool calls 🧰</Badge>}
+                    {meta.superhuman && <Badge variant="secondary">superhuman finish ⚡</Badge>}
                     {meta.chaos && <Badge variant="secondary">certified chaos 🌪️</Badge>}
                   </div>
                 </CardContent>

@@ -33,7 +33,7 @@ A one-page, no-scroll Rubik's cube playground with an AI attitude:
 
 1. 🌪️ **You scramble** — pick a preset (*Chill → Spicy → GIGACHAD → 🤯 UNHINGED*), mash the manual turn buttons, or unleash a **custom number of turns** (up to 4900).
 2. 🧠 **Jev judges** — a System One judgment model rates your chaos: one of **five meme tiers**, a **1–5 star difficulty rating**, and exactly one roast.
-3. 🤖 **Jev solves** — the exact solution streams move-by-move over SSE while the 3D cube executes it at adaptive speed.
+3. 🤖 **Jev solves** — an agent loop: Jev reads the live cube state, picks its next job from a toolbox step by step, and every move streams over SSE while the 3D cube executes it at adaptive speed.
 4. 🎰 **You gamble** — bank the XP, or feed it to **Jev's Gambit**: a double-or-nothing slot machine (×2, ×3, ×5, ×10… or 💀 bust).
 
 Plus: XP, ranks (*NPC → Mid Scrambler → Certified Cook → GIGACHAD → Sigma Orchestrator*), badges, run stats, confetti, victory spins, and a live feed that never stops talking.
@@ -62,14 +62,18 @@ Plus: XP, ranks (*NPC → Mid Scrambler → Certified Cook → GIGACHAD → Sigm
 ┌──────────────────────────────▼──────────────────────────────┐
 │  /api/solve  (server-only route)                            │
 │  • validates + simplifies the scramble                      │
-│  • exact solution = simplified inverse (deterministic)      │
+│  • computes the real cube state (cubie model + facelets)    │
+│  • AGENT LOOP: Jev sees full reality and picks the next     │
+│    tool (cross, seat that corner, thread that edge,         │
+│    superhuman finish…) ──►  toolbox executes exactly that   │
 │  • judgment pass via engine adapter  ──►  JEV (AI verdict)  │
-│  • projects raw inference → gameplay values (never leaked)  │
-│  • streams curated events: meta ▸ move ▸ done               │
+│  • every solution verified vs a reference model before      │
+│    streaming; raw inference is never leaked                 │
+│  • streams curated events: meta ▸ waypoint ▸ move ▸ done    │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**The cube engine** (adapted from [buuing/Rubiks-Cube](https://github.com/buuing/Rubiks-Cube), the most-starred Three.js cube, rebuilt for React Three Fiber) solves by exact inverse-of-history with move simplification — verified in CI-style harnesses: `scripts/cube-math-check.mjs` (200 randomized trials) and `scripts/cube-stress-large.mjs` (500-turn scrambles). Every cubie returns home, always.
+**The cube machinery** (adapted from [buuing/Rubiks-Cube](https://github.com/buuing/Rubiks-Cube), the most-starred Three.js cube, rebuilt for React Three Fiber) is a toolbox, not an autopilot: piece-scoped executors (cross BFS, corner seating, edge threading, last-layer searches) plus a Kociemba two-phase *speedrun* finish — Jev's choices decide which runs when. Every tool and every full solution is verified in CI-style harnesses: `pnpm check` (`scripts/solver-check.mjs`: randomized solves cross-checked against a reference cube library), plus `scripts/cube-math-check.mjs` (200 animation-math trials). Every cubie returns home, always.
 
 ## 🔐 Security & compliance
 
@@ -82,7 +86,7 @@ The AI provider is a deliberate implementation detail:
 | Raw inference (questions, criteria, probabilities, model ids, latency) | Stays inside the API route — never logged, never streamed |
 | Client bundle | Zero provider strings (verified by bundle grep — see `COMPLIANCE.md §5`) |
 
-The client receives exactly four curated event types — `meta`, `move`, `done`, `error` — signed `engine: "jev-stream/1"`, plus a generic token count.
+The client receives exactly five curated event types — `meta`, `waypoint`, `move`, `done`, `error` — signed `engine: "jev-stream/1"`, plus a generic token count.
 
 📄 **[COMPLIANCE.md](./COMPLIANCE.md)** maps every obligation of the engine's Master Customer Agreement (license scope §2.1–2.3, credentials §2.4, input/output handling §4, end-user disclosures §5, publicity §15.4) to the exact files and mechanisms that satisfy it — including the deliberate no-benchmarks rule (§2.3f) and the provider-anonymized public copy.
 
@@ -111,7 +115,8 @@ node scripts/cube-stress-large.mjs
 | `pnpm dev` | Dev server |
 | `pnpm build` | Production build |
 | `pnpm start` | Serve the production build |
-| `node scripts/cube-math-check.mjs` | 200-trial scramble/solve correctness harness |
+| `pnpm check` | toolbox + solver correctness harness (randomized, reference cross-checked) |
+| `node scripts/cube-math-check.mjs` | 200-trial animation-math correctness harness |
 | `node scripts/cube-stress-large.mjs` | 500-turn scramble stress harness |
 
 ## 📁 Project map
@@ -119,7 +124,7 @@ node scripts/cube-stress-large.mjs
 ```text
 src/
 ├── app/
-│   ├── api/solve/route.ts        🔒 judgment + SSE stream (server-only)
+│   ├── api/solve/route.ts        🔒 Jev agent loop + SSE stream (server-only)
 │   ├── opengraph-image.tsx       dynamic OG image (ImageResponse)
 │   ├── layout.tsx                fonts · metadata · JSON-LD · Analytics
 │   ├── robots.ts · sitemap.ts · manifest.ts · icon.svg
@@ -131,7 +136,10 @@ src/
 │   ├── ErrorBoundary.tsx         localStorage corruption shield
 │   └── Logo.tsx
 ├── lib/
-│   ├── cube.ts                   move engine (validate · invert · simplify)
+│   ├── cube.ts                   move alphabet (validate · invert · simplify)
+│   ├── cubie.ts                  cubie state model (perm + orientation)
+│   ├── solve-lbl.ts              🔧 Jev's toolbox (cross · corners · edges · LL)
+│   ├── solve-kociemba.ts         ⚡ speedrun solver + reference verification
 │   ├── store.ts                  XP · badges · run stats (persisted)
 │   └── memes.ts                  tier banks · roasts · ranks
 └── server/
