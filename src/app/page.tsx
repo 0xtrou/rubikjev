@@ -34,6 +34,7 @@ type Meta = {
   solutionLength: number;
   tools: number;
   superhuman: boolean;
+  solved: boolean;
   tier: TierKey;
   tierLabel: string;
   tierEmoji: string;
@@ -129,6 +130,8 @@ export default function Home() {
   const metaRef = useRef<Meta | null>(null);
   const gambleBaseRef = useRef(0);
   const moveTickerRef = useRef<Move[]>([]);
+  const streamedRef = useRef<Move[]>([]);
+  const solvedRef = useRef(true);
 
   const [phase, setPhase] = useState<Phase>("idle");
   const [resetKey, setResetKey] = useState(0);
@@ -283,6 +286,8 @@ export default function Home() {
     cubeRef.current.clearPending();
     setTurn(null);
     moveTickerRef.current = [];
+    streamedRef.current = [];
+    solvedRef.current = true;
     say("waking Jev up… ☕");
 
     try {
@@ -318,11 +323,24 @@ export default function Home() {
           // Buffered, then animated the moment the cube is free — the tick
           // fires with the actual turn (see RubiksCube.startMove).
           cubeRef.current?.feedMove(payload.move);
-          // Raw move ticker: every judged move streams into the feed.
+          // Raw move ticker: every streamed move lands in the feed, honestly
+          // tagged — 🧠 judged by Jev, ⚡ the tool Jev chose to invoke.
+          streamedRef.current.push(payload.move);
           moveTickerRef.current.push(payload.move);
           const tail = moveTickerRef.current.slice(-14).join(" ");
-          setFeed((f) => [{ id: 0, text: `🧠 ${tail}` }, ...f.filter((x) => x.id !== 0)].slice(0, 12));
+          const tag = payload.by === "tool" ? "⚡" : "🧠";
+          setFeed((f) => [{ id: 0, text: `${tag} ${tail}` }, ...f.filter((x) => x.id !== 0)].slice(0, 12));
         } else if (event === "done") {
+          if (!payload.solved) {
+            // Jev could not finish — own it. The cube keeps its true state
+            // (Jev's real moves stay applied); no XP, no gamble, no confetti.
+            solvedRef.current = false;
+            celebrateRef.current = false;
+            historyRef.current.push(...streamedRef.current);
+            say("🤷 Jev tapped out — it couldn't finish this one. every move played was really its call.");
+            toast("Jev couldn't solve it this time 🤷");
+            return;
+          }
           const firstEver = solves === 0;
           const scrambleMoves = historyRef.current.length;
           recordSolve(scrambleMoves);
@@ -358,6 +376,10 @@ export default function Home() {
       }
 
       cubeRef.current.onSettled(() => {
+        if (!solvedRef.current) {
+          setPhase("ready");
+          return;
+        }
         setPhase("solved");
         const m = metaRef.current;
         if (m) {
@@ -800,9 +822,12 @@ export default function Home() {
                         string and a progress summary, never your move history, never
                         anything personal — and judges the solve one move at a time:
                         the 18-move alphabet is declared once, then every turn Jev
-                        sees the fresh state and picks exactly one move. When the
-                        clock runs out, a superhuman (near-optimal) finish takes
-                        over. You get a verdict (one of five meme tiers, a 1–5 star
+                        sees the fresh state and picks exactly one move. Nothing
+                        else ever rotates the cube: if the engine is down, nothing
+                        streams; if Jev can't finish, the run ends failed and it
+                        owns the miss (the one exception: the superhuman tool,
+                        only when Jev itself invokes it — tagged ⚡ in the feed).
+                        You get a verdict (one of five meme tiers, a 1–5 star
                         rating, exactly one roast) and every move streams turn by
                         turn. Every run meters the tokens it burned.
                       </p>

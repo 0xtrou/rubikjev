@@ -66,8 +66,9 @@ Plus: XP, ranks (*NPC → Mid Scrambler → Certified Cook → GIGACHAD → Sigm
 │  • MOVE-BY-MOVE LOOP: Jev judges EVERY single move — the    │
 │    18-move alphabet is declared once, then it sees only the │
 │    live cube state (facelets + progress — NEVER the move    │
-│    history) each turn and plays one move; a superhuman      │
-│    (Kociemba) finisher takes the tail when the clock runs   │
+│    history) each turn and plays one move; the only non-Jev  │
+│    moves are the superhuman tool's, streamed only when Jev  │
+│    itself invokes it (tagged ⚡) — no engine, no rotation    │
 │  • judgment pass via engine adapter  ──►  JEV (AI verdict)  │
 │  • every solution verified vs a reference model before      │
 │    streaming; raw inference is never leaked                 │

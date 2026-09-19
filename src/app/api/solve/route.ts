@@ -1,11 +1,7 @@
 import { NextRequest } from "next/server";
 import { choice, getEngineClient, noul, score } from "@/server/jev-engine";
-import { parseHistory, scrambleStats, solveFor, FACES, type Move } from "@/lib/cube";
+import { parseHistory, scrambleStats, type Move } from "@/lib/cube";
 import { applyMoves, solvedCube, isSolved } from "@/lib/cubie";
-import {
-  buildCross, seatCorner, threadEdge, orientTopEdges, permuteTopEdges,
-  finishTopCorners,
-} from "@/lib/solve-lbl";
 import { solveKociembaFacelets, referenceFacelets, referenceSolvesFacelets } from "@/lib/solve-kociemba";
 import { ROASTS, TIERS, type TierKey } from "@/lib/memes";
 
@@ -33,9 +29,10 @@ export const maxDuration = 60;
 //     state back
 //   • like a real cuber, Jev judges only what it sees — it has no idea what
 //     moves created the scramble
-//   • a wall-clock budget and stall detector hand the tail to the superhuman
-//     (Kociemba) finisher; the final sequence must solve the reference model
-//     or the route refuses to stream it
+//   • HONESTY: if the engine is not ready, nothing is streamed and the cube
+//     never rotates; if Jev cannot finish, the stream ends failed — the only
+//     non-Jev moves that ever stream are the superhuman tool's, and only when
+//     Jev itself chose to invoke it (tagged "tool" in the stream)
 // ---------------------------------------------------------------------------
 
 const client = getEngineClient();
@@ -44,7 +41,7 @@ const client = getEngineClient();
 const ENGINE = "jev-stream/1";
 
 // The move alphabet — Jev's complete action space, declared once.
-const ALPHABET: Move[] = FACES.flatMap((f) => [f, (f + "'") as Move, (f + "2") as Move]);
+const ALPHABET: Move[] = ["U", "D", "L", "R", "F", "B"].flatMap((f) => [f, (f + "'") as Move, (f + "2") as Move]);
 
 // Small in-memory rate limiter (per warm instance; good enough for a demo).
 const hits = new Map<string, { count: number; resetAt: number }>();
@@ -76,6 +73,31 @@ type Milestone = { at: number; emoji: string; feed: string };
 
 const inverseOf = (m: Move): Move => (m.endsWith("'") ? m[0] : m + "'");
 
+// Options are shuffled every call: a judgment model favors early options, and
+// a fixed order would have it playing the same face forever.
+const shuffled = <T>(arr: T[]): T[] => {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+};
+
+// Legal, non-degenerate candidates for one judged turn: no instant undo, and
+// no third consecutive turn of the same face (U U U is a null lap).
+function candidateMoves(lastMoves: Move[]): Move[] {
+  const last = lastMoves[lastMoves.length - 1];
+  const prev = lastMoves[lastMoves.length - 2];
+  return ALPHABET.filter((m) => {
+    if (last && m === inverseOf(last)) return false;
+    if (last && prev && m[0] === last[0] && last[0] === prev[0]) return false;
+    return true;
+  });
+}
+
+const SPEEDRUN_PICK = "__speedrun__";
+
 // Server-private judgment pass: verdict + first move in ONE call. The request
 // state carries the cube reality only — the scramble history stays here.
 async function judgeFirst(
@@ -95,120 +117,104 @@ async function judgeFirst(
     },
   };
 
-  const optionsOf = (moves: Move[]) => Object.fromEntries(moves.map((m) => [m, `Play ${m}.`]));
+  const optionsOf = (moves: Move[]) =>
+    Object.fromEntries(moves.map((m) => [m, m === SPEEDRUN_PICK ? "Go superhuman: finish the whole cube near-optimally (you may invoke this tool)." : `Play ${m}.`]));
 
-  try {
-    if (!client) throw new Error("no-key");
-    const response = await client.systemOne({
-      state: requestState,
-      questions: {
-        chaos_tier: choice(
-          "Looking only at this scrambled cube state, what meme tier describes the player who left it like this?",
-          {
-            GIGACHAD_SCRAMBLE: "Monstrous, high-effort chaos. Long, devious, no mercy.",
-            CERTIFIED_COOKER: "Solid, genuinely tricky scramble. The player cooked.",
-            MID: "Average, forgettable difficulty. Nothing special.",
-            NPC_CHAOS: "Random button mashing with little actual disorder.",
-            TOUCH_GRASS: "Barely scrambles the cube. Trivial or lazy.",
-          }
-        ),
-        // Rubric indices 0..4 map to stars 1..5.
-        difficulty: score(
-          "How brutally difficult is this scrambled state for a human speedcuber to solve without help?",
-          [
-            "Trivial: a few turns, undone on sight.",
-            "Easy: short scramble with obvious cancellations.",
-            "Moderate: a real scramble, solvable with focus.",
-            "Hard: long, tangled, demands real skill.",
-            "Brutal: maximum-entropy nightmare, GIGACHAD only.",
-          ]
-        ),
-        genuine_chaos: noul(
-          "Does this state show genuine deep disorder (most pieces far from home), or barely any disturbance?",
-          { true: "The cube is deeply wrecked.", false: "The cube is barely disturbed." }
-        ),
-        first_move: choice(
-          "You are Jev. This cube is scrambled and you will dismantle it one move at a time. Which single move do you play first?",
-          optionsOf(ALPHABET)
-        ),
-      },
-    });
+  // No catch on purpose: if the engine is not ready, the route answers 503 and
+  // NOTHING is streamed — the cube never rotates for a solve Jev did not judge.
+  if (!client) throw new Error("jev-not-ready");
+  const response = await client.systemOne({
+    state: requestState,
+    questions: {
+      chaos_tier: choice(
+        "Looking only at this scrambled cube state, what meme tier describes the player who left it like this?",
+        {
+          GIGACHAD_SCRAMBLE: "Monstrous, high-effort chaos. Long, devious, no mercy.",
+          CERTIFIED_COOKER: "Solid, genuinely tricky scramble. The player cooked.",
+          MID: "Average, forgettable difficulty. Nothing special.",
+          NPC_CHAOS: "Random button mashing with little actual disorder.",
+          TOUCH_GRASS: "Barely scrambles the cube. Trivial or lazy.",
+        }
+      ),
+      // Rubric indices 0..4 map to stars 1..5.
+      difficulty: score(
+        "How brutally difficult is this scrambled state for a human speedcuber to solve without help?",
+        [
+          "Trivial: a few turns, undone on sight.",
+          "Easy: short scramble with obvious cancellations.",
+          "Moderate: a real scramble, solvable with focus.",
+          "Hard: long, tangled, demands real skill.",
+          "Brutal: maximum-entropy nightmare, GIGACHAD only.",
+        ]
+      ),
+      genuine_chaos: noul(
+        "Does this state show genuine deep disorder (most pieces far from home), or barely any disturbance?",
+        { true: "The cube is deeply wrecked.", false: "The cube is barely disturbed." }
+      ),
+      first_move: choice(
+        "You are Jev. This cube is scrambled and you will dismantle it one move at a time. Which single move do you play first?",
+        optionsOf(shuffled([...ALPHABET, SPEEDRUN_PICK]))
+      ),
+    },
+  });
 
-    const a = response.answers;
-    // Raw inference (choice probabilities, confidence, rubric, usage, model id)
-    // stays inside this function by design.
-    const tier = (a.chaos_tier?.choice ?? "MID") as TierKey;
-    const stars = Math.min(5, Math.max(1, Math.round((a.difficulty?.score ?? 2) + 1)));
-    const chaos = (a.genuine_chaos?.noul ?? 0.5) > 0.6;
-    const firstMove = ALPHABET.includes(a.first_move?.choice as Move)
-      ? (a.first_move?.choice as Move)
-      : null;
-    const roasts = ROASTS[tier];
-    return {
-      judgement: {
-        tier,
-        stars,
-        roast: roasts[stats.length % roasts.length],
-        chaos,
-        tokens: response.usage.input_tokens + response.usage.output_tokens,
-        live: true,
-      },
-      firstMove,
-    };
-  } catch {
-    // Degraded mode: heuristic judge so the game keeps running. Still no
-    // inference details are exposed (there are none).
-    const tier: TierKey =
-      stats.simplifiedLength >= 20 ? "GIGACHAD_SCRAMBLE"
-      : stats.simplifiedLength >= 12 ? "CERTIFIED_COOKER"
-      : stats.simplifiedLength >= 6 ? "MID"
-      : stats.cancellations > 0 ? "NPC_CHAOS"
-      : "TOUCH_GRASS";
-    const stars = Math.min(5, Math.max(1, Math.ceil(stats.simplifiedLength / 5)));
-    const roasts = ROASTS[tier];
-    return {
-      judgement: {
-        tier,
-        stars,
-        roast: roasts[stats.length % roasts.length],
-        chaos: stats.cancellations === 0,
-        tokens: 0,
-        live: false,
-      },
-      firstMove: null,
-    };
-  }
+  const a = response.answers;
+  // Raw inference (choice probabilities, confidence, rubric, usage, model id)
+  // stays inside this function by design.
+  const tier = (a.chaos_tier?.choice ?? "MID") as TierKey;
+  const stars = Math.min(5, Math.max(1, Math.round((a.difficulty?.score ?? 2) + 1)));
+  const chaos = (a.genuine_chaos?.noul ?? 0.5) > 0.6;
+  const firstPick = a.first_move?.choice as Move;
+  const firstMove = firstPick === SPEEDRUN_PICK
+    ? SPEEDRUN_PICK
+    : ALPHABET.includes(firstPick) ? firstPick : null;
+  const roasts = ROASTS[tier];
+  return {
+    judgement: {
+      tier,
+      stars,
+      roast: roasts[stats.length % roasts.length],
+      chaos,
+      tokens: response.usage.input_tokens + response.usage.output_tokens,
+      live: true,
+    },
+    firstMove,
+  };
 }
 
-// Later turns: Jev sees the fresh state and judges the next single move.
+// Later turns: Jev sees the fresh state and judges the next single move — or
+// invokes the superhuman tool itself (SPEEDRUN_PICK, an honest delegation).
 async function judgeNextMove(
   state: ReturnType<typeof applyMoves>,
   facelets: string | null,
   turn: number,
-  forbid: Move | null,
-): Promise<Move | null> {
+  lastMoves: Move[],
+): Promise<Move | typeof SPEEDRUN_PICK | null> {
   try {
-    if (!client) throw new Error("no-key");
-    const options = ALPHABET.filter((m) => m !== forbid);
+    if (!client) throw new Error("jev-not-ready");
+    const options = shuffled([...candidateMoves(lastMoves), SPEEDRUN_PICK]);
     const response = await client.systemOne({
       state: {
         cube: {
           facelets,
           progress: progressOf(state),
-          note: `Live cube after turn ${turn}. Play exactly one move from your alphabet.`,
+          yourLastMoves: lastMoves.slice(-3),
+          note: `Live cube after turn ${turn}. Play exactly one move from your alphabet — or invoke the superhuman tool if you want it finished for you.`,
         },
       },
       questions: {
         next_move: choice(
           "You are Jev, dismantling the cube one move per turn. Which single move do you play now?",
-          Object.fromEntries(options.map((m) => [m, `Play ${m}.`]))
+          Object.fromEntries(options.map((m) => [m, m === SPEEDRUN_PICK ? "Go superhuman: finish the whole cube near-optimally (you may invoke this tool)." : `Play ${m}.`]))
         ),
       },
     });
     const picked = response.answers.next_move?.choice as Move;
-    return options.includes(picked) ? picked : null;
+    if (picked === SPEEDRUN_PICK) return SPEEDRUN_PICK;
+    const cands = candidateMoves(lastMoves);
+    return cands.includes(picked) ? picked : null;
   } catch {
-    return null; // any engine hiccup → the fallback takes over
+    return null; // engine hiccup this turn — the loop may retry, honestly
   }
 }
 
@@ -242,30 +248,6 @@ function milestoneFor(before: ReturnType<typeof progressOf>, after: ReturnType<t
   if (after.topSolved && !before.topSolved) newly.push("cube FINISHED 🎯");
   if (newly.length === 0) return null;
   return { at: -1, emoji: "🧠", feed: newly.slice(0, 2).join(" · ") };
-}
-
-// Degraded (no engine key) path: the toolbox autopilot — the same move stream,
-// just without Jev judging it.
-async function degradedSolve(
-  start: ReturnType<typeof applyMoves>,
-): Promise<Move[]> {
-  const solution: Move[] = [];
-  let cur = start;
-  const run = (ms: Move[]) => {
-    if (ms.length) {
-      solution.push(...ms);
-      cur = applyMoves(cur, ms);
-    }
-  };
-  const edgeDone = (s: ReturnType<typeof applyMoves>, p: number) => s.ep[p] === p && s.eo[p] === 0;
-  const cornerDone = (s: ReturnType<typeof applyMoves>, p: number) => s.cp[p] === p && s.co[p] === 0;
-  if (![4, 5, 6, 7].every((p) => edgeDone(cur, p))) run(buildCross(cur, "SWIFT"));
-  for (let r = 0; r < 4; r++) if (!cornerDone(cur, 4 + r)) run(seatCorner(cur, r));
-  for (let r = 0; r < 4; r++) if (!edgeDone(cur, 8 + r)) run(threadEdge(cur, r));
-  run(orientTopEdges(cur));
-  run(permuteTopEdges(cur));
-  run(finishTopCorners(cur));
-  return solution;
 }
 
 function xpFor(j: Judgement, solutionLength: number): number {
@@ -302,37 +284,44 @@ export async function POST(req: NextRequest) {
   }
 
   // --- the move-by-move agent loop -------------------------------------------
-  // Jev judges ONE move per call from the live state; history stays private.
+  // HONESTY RULE: the cube only ever rotates moves Jev actually judged (or the
+  // superhuman tool Jev itself chose to invoke, tagged "tool"). If the engine
+  // is not ready, this route answers 503 and streams NOTHING. If Jev cannot
+  // finish, the stream ends honestly failed — no substitute solver spins the
+  // cube on Jev's behalf.
   let state = applyMoves(solvedCube(), history);
   const startFacelets = referenceFacelets(history);
   let facelets = startFacelets;
   const soFar: Move[] = [...history];
 
-  const { judgement, firstMove } = await judgeFirst(history, state, facelets);
+  let judgement: Judgement;
+  let firstMove: Move | typeof SPEEDRUN_PICK | null;
+  try {
+    const first = await judgeFirst(history, state, facelets);
+    judgement = first.judgement;
+    firstMove = first.firstMove;
+  } catch {
+    return Response.json(
+      { error: "Jev isn't ready — and nothing rotates the cube without Jev." },
+      { status: 503 }
+    );
+  }
 
-  const solution: Move[] = [];
+  const solution: { move: Move; by: "jev" | "tool" }[] = [];
   const milestones: Milestone[] = [];
   let superhuman = false;
   let judgedCalls = 0;
 
   const BUDGET_MS = 30_000;
   const MAX_JUDGED_MOVES = 140;
+  const MAX_MOVES_WITHOUT_PROGRESS = 20;
   const budgetStart = Date.now();
 
-  if (!judgement.live) {
-    // No engine key / engine down: toolbox autopilot, same move stream.
-    const degraded = await degradedSolve(state);
-    milestones.push({
-      at: 0,
-      emoji: "🧰",
-      feed: "no engine key — toolbox autopilot engaged",
-    });
-    solution.push(...degraded);
-    state = applyMoves(state, degraded);
-  } else {
-    let next = firstMove;
+  if (!isSolved(state)) {
+    let next: Move | typeof SPEEDRUN_PICK | null = firstMove;
     let lastMove: Move | null = null;
     let stalls = 0;
+    let judgedSinceProgress = 0;
     let prevProgress = progressOf(state);
     const noteProgress = () => {
       const p = progressOf(state);
@@ -340,64 +329,75 @@ export async function POST(req: NextRequest) {
       if (m) {
         m.at = solution.length;
         milestones.push(m);
+        judgedSinceProgress = 0;
       }
       prevProgress = p;
     };
 
-    while (!isSolved(state) && solution.length < MAX_JUDGED_MOVES && Date.now() - budgetStart < BUDGET_MS && stalls < 3) {
-      let move = next;
+    while (
+      !isSolved(state) &&
+      solution.length < MAX_JUDGED_MOVES &&
+      judgedSinceProgress < MAX_MOVES_WITHOUT_PROGRESS &&
+      Date.now() - budgetStart < BUDGET_MS &&
+      stalls < 3
+    ) {
+      let pick = next;
       next = null;
-      if (!move) {
-        move = await judgeNextMove(state, facelets, solution.length + 1, lastMove ? inverseOf(lastMove) : null);
+      if (!pick) {
+        pick = await judgeNextMove(state, facelets, solution.length + 1, soFar.slice(-6));
       }
-      if (move && lastMove && move === inverseOf(lastMove)) {
-        continue; // instant undo — wasted turn, not a failure; do not replay it
+      if (pick === SPEEDRUN_PICK) {
+        // Jev's own choice to delegate — tagged honestly as tool moves.
+        superhuman = true;
+        judgedCalls += 1;
+        milestones.push({
+          at: solution.length,
+          emoji: "⚡",
+          feed: "JEV called the superhuman finisher — the rest is its tool, not its judgment",
+        });
+        try {
+          const tail = await solveKociembaFacelets(facelets ?? "");
+          for (const m of tail) {
+            solution.push({ move: m, by: "tool" });
+            state = applyMoves(state, [m]);
+            soFar.push(m);
+          }
+          facelets = referenceFacelets(soFar);
+        } catch {
+          // tool failed mid-delegation → honest stop, nothing else rotates
+        }
+        break;
       }
-      if (!move || !ALPHABET.includes(move)) {
-        stalls += 1; // bad answer / engine hiccup — allow a retry or two
+      if (pick && lastMove && pick === inverseOf(lastMove)) {
+        continue; // instant undo — skipped, never executed
+      }
+      if (!pick || !ALPHABET.includes(pick)) {
+        stalls += 1; // bad answer / engine hiccup — a retry or two, then honest fail
         continue;
       }
       judgedCalls += 1;
-      solution.push(move);
-      state = applyMoves(state, [move]);
-      soFar.push(move);
+      judgedSinceProgress += 1;
+      solution.push({ move: pick, by: "jev" });
+      state = applyMoves(state, [pick]);
+      soFar.push(pick);
       facelets = referenceFacelets(soFar);
-      lastMove = move;
+      lastMove = pick;
       noteProgress();
     }
-
-    // Clock out: whatever Jev did not finish, the superhuman finisher does.
-    if (!isSolved(state)) {
-      superhuman = true;
-      milestones.push({
-        at: solution.length,
-        emoji: "⚡",
-        feed: "clock's out — going superhuman for the finish",
-      });
-      try {
-        const tail = await solveKociembaFacelets(facelets ?? "");
-        solution.push(...tail);
-        state = applyMoves(state, tail);
-      } catch {
-        // fall through to the verification gate, which rewinds honestly
-      }
-    }
   }
 
-  // --- verification gate: the stream must genuinely solve the cube -----------
-  if (!isSolved(state) || !referenceSolvesFacelets(startFacelets ?? "", solution)) {
-    solution.length = 0;
-    milestones.length = 0;
-    milestones.push({ at: 0, emoji: "⏪", feed: "got lazy — brute undo (should not happen)" });
-    solution.push(...solveFor(history));
-    superhuman = false;
+  // --- verification gate: a claimed solve must genuinely solve ---------------
+  const solved = isSolved(state);
+  if (solved && !referenceSolvesFacelets(startFacelets ?? "", solution.map((s) => s.move))) {
+    // Internal inconsistency — refuse to stream rather than fake a win.
+    return Response.json({ error: "verification failed — nothing streamed" }, { status: 500 });
   }
 
-  const xp = xpFor(judgement, solution.length);
+  const xp = solved ? xpFor(judgement, solution.length) : 0;
   // Pace the solve so it reads like the AI is thinking move-by-move, with a
   // time budget so even monster scrambles finish inside the function limit.
   // The client matches its animation to this exact pace.
-  const perMove = Math.max(5, Math.min(90, Math.min(260, 36000 / solution.length)));
+  const perMove = Math.max(5, Math.min(90, Math.min(260, 36000 / Math.max(1, solution.length))));
 
   // Curated gameplay events only — no provider, model, or timing metadata.
   const meta = {
@@ -405,6 +405,7 @@ export async function POST(req: NextRequest) {
     solutionLength: solution.length,
     tools: judgedCalls,
     superhuman,
+    solved,
     tier: judgement.tier,
     tierLabel: TIERS[judgement.tier].label,
     tierEmoji: TIERS[judgement.tier].emoji,
@@ -433,7 +434,7 @@ export async function POST(req: NextRequest) {
             const m = milestones[mi++];
             send("waypoint", { emoji: m.emoji, feed: m.feed });
           }
-          send("move", { move: solution[i], i, n: solution.length });
+          send("move", { move: solution[i].move, by: solution[i].by, i, n: solution.length });
           await sleep(perMove);
         }
         while (mi < milestones.length) {
@@ -441,7 +442,7 @@ export async function POST(req: NextRequest) {
           send("waypoint", { emoji: m.emoji, feed: m.feed });
         }
 
-        send("done", { xp, solved: true });
+        send("done", { xp, solved });
       } catch {
         try {
           send("error", { message: "Jev tripped on a LAN cable. Try again 🙃" });
