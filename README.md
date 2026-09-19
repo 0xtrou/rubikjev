@@ -76,7 +76,7 @@ Plus: XP, ranks (*NPC → Mid Scrambler → Certified Cook → GIGACHAD → Sigm
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**The cube machinery** (adapted from [buuing/Rubiks-Cube](https://github.com/buuing/Rubiks-Cube), the most-starred Three.js cube, rebuilt for React Three Fiber) is a toolbox, not an autopilot: piece-scoped executors (cross BFS, corner seating, edge threading, last-layer searches) plus a Kociemba two-phase *speedrun* finish — Jev's choices decide which runs when. Every tool and every full solution is verified in CI-style harnesses: `pnpm check` (`scripts/solver-check.mjs`: randomized solves cross-checked against a reference cube library), plus `scripts/cube-math-check.mjs` (200 animation-math trials). Every cubie returns home, always.
+**The cube machinery** (adapted from [buuing/Rubiks-Cube](https://github.com/buuing/Rubiks-Cube), the most-starred Three.js cube, rebuilt for React Three Fiber) only turns for judged moves: Jev plays one judged move per call against the live state; the sole non-Jev mover is the Kociemba two-phase solver, and only when Jev itself invokes it as a tool (tagged ⚡ in the stream). Every solve is verified against an independent reference model before streaming, and the 📜 Audit tab logs every turn that rotated the cube (🌪️ yours · 🧠 Jev's · ⚡ its tool's). Harnesses: `pnpm check` (`scripts/solver-check.mjs`: model + facelets + randomized Kociemba, reference cross-checked) and `scripts/cube-math-check.mjs` (200 animation-math trials). Every cubie returns home, always.
 
 ## 🔐 Security & compliance
 
@@ -118,7 +118,7 @@ node scripts/cube-stress-large.mjs
 | `pnpm dev` | Dev server |
 | `pnpm build` | Production build |
 | `pnpm start` | Serve the production build |
-| `pnpm check` | toolbox + solver correctness harness (randomized, reference cross-checked) |
+| `pnpm check` | cube model + facelets + Kociemba harness (reference cross-checked) |
 | `node scripts/cube-math-check.mjs` | 200-trial animation-math correctness harness |
 | `node scripts/cube-stress-large.mjs` | 500-turn scramble stress harness |
 
@@ -141,8 +141,7 @@ src/
 ├── lib/
 │   ├── cube.ts                   move alphabet (validate · invert · simplify)
 │   ├── cubie.ts                  cubie state model (perm + orientation)
-│   ├── solve-lbl.ts              🔧 Jev's toolbox (cross · corners · edges · LL)
-│   ├── solve-kociemba.ts         ⚡ speedrun solver + reference verification
+│   ├── solve-kociemba.ts         ⚡ superhuman solver + reference verification
 │   ├── store.ts                  XP · badges · run stats (persisted)
 │   └── memes.ts                  tier banks · roasts · ranks
 └── server/

@@ -138,6 +138,7 @@ export default function Home() {
   const [preset, setPreset] = useState(1);
   const [meta, setMeta] = useState<Meta | null>(null);
   const [feed, setFeed] = useState<{ id: number; text: string }[]>([]);
+  const [audit, setAudit] = useState<{ i: number; move: Move; by: "scramble" | "jev" | "tool" }[]>([]);
   const [hype, setHype] = useState(HYPE_LINES[0]);
   const [tab, setTab] = useState("play");
   const [turn, setTurn] = useState<number | null>(null);
@@ -255,6 +256,7 @@ export default function Home() {
     sfx.whoosh();
     const moves = randomScramble(SCRAMBLE_PRESETS[preset].moves);
     historyRef.current = moves;
+    setAudit(moves.map((m, idx) => ({ i: idx + 1, move: m, by: "scramble" as const })));
     setMeta(null);
     setTurn(null);
     setSolvedStats(null);
@@ -327,6 +329,7 @@ export default function Home() {
           // tagged — 🧠 judged by Jev, ⚡ the tool Jev chose to invoke.
           streamedRef.current.push(payload.move);
           moveTickerRef.current.push(payload.move);
+          setAudit((a) => [...a, { i: a.length + 1, move: payload.move, by: payload.by === "tool" ? "tool" : "jev" }]);
           const tail = moveTickerRef.current.slice(-14).join(" ");
           const tag = payload.by === "tool" ? "⚡" : "🧠";
           setFeed((f) => [{ id: 0, text: `${tag} ${tail}` }, ...f.filter((x) => x.id !== 0)].slice(0, 12));
@@ -428,6 +431,7 @@ export default function Home() {
       }
       const applied = moves.slice(0, room);
       historyRef.current.push(...applied);
+      setAudit((a) => [...a, ...applied.map((m, idx) => ({ i: a.length + idx + 1, move: m, by: "scramble" as const }))]);
       setMeta(null);
       if (phase === "solved" || phase === "idle") setPhase("ready");
       cubeRef.current.enqueue(applied, "fast");
@@ -465,6 +469,7 @@ export default function Home() {
     setMeta(null);
     setTurn(null);
     setSolvedStats(null);
+    setAudit([]);
     cubeRef.current?.clearPending();
     setPhase("idle");
     setResetKey((k) => k + 1);
@@ -652,9 +657,10 @@ export default function Home() {
           {/* Right column: tabs (play/stats/about) + verdict pinned under the input */}
           <div className="flex flex-col gap-3 lg:min-h-0">
             <Tabs value={tab} onValueChange={setTab} className="flex flex-col flex-1 lg:min-h-0">
-              <TabsList className="grid w-full grid-cols-3 mb-2">
+              <TabsList className="grid w-full grid-cols-4 mb-2">
                 <TabsTrigger value="play">🎮 Play</TabsTrigger>
                 <TabsTrigger value="stats">📊 Stats</TabsTrigger>
+                <TabsTrigger value="audit">📜 Audit</TabsTrigger>
                 <TabsTrigger value="about">🧠 About Jev</TabsTrigger>
               </TabsList>
 
@@ -801,6 +807,58 @@ export default function Home() {
                 </Card>
               </TabsContent>
 
+              <TabsContent value="audit" className="mt-0 flex-1 lg:min-h-0 lg:overflow-y-auto">
+                <Card className="border-2">
+                  <CardHeader className="pb-2 pt-3">
+                    <CardTitle className="font-heading text-xl">📜 ROTATION AUDIT</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    {audit.length === 0 ? (
+                      <p className="text-sm text-muted-foreground">
+                        nothing has moved yet. every turn that rotates the cube —
+                        yours, Jev&apos;s judged moves, its tool&apos;s — lands here.
+                      </p>
+                    ) : (
+                      <>
+                        <div className="mb-2 flex flex-wrap gap-1.5 text-[10px] font-mono text-muted-foreground">
+                          <Badge variant="secondary" className="font-mono">
+                            🌪️ {audit.filter((x) => x.by === "scramble").length} scramble
+                          </Badge>
+                          <Badge variant="secondary" className="font-mono">
+                            🧠 {audit.filter((x) => x.by === "jev").length} judged by Jev
+                          </Badge>
+                          <Badge variant="secondary" className="font-mono">
+                            ⚡ {audit.filter((x) => x.by === "tool").length} by its tool
+                          </Badge>
+                        </div>
+                        <div className="grid grid-cols-4 sm:grid-cols-6 gap-1">
+                          {(audit.length > 300 ? audit.slice(-300) : audit).map((e) => (
+                            <span
+                              key={e.i}
+                              title={`turn ${e.i} — ${e.by === "scramble" ? "player scramble" : e.by === "jev" ? "judged by Jev" : "superhuman tool Jev invoked"}`}
+                              className={`rounded border px-1.5 py-0.5 font-mono text-[11px] ${
+                                e.by === "tool"
+                                  ? "border-amber-400/40 bg-amber-400/10 text-amber-300"
+                                  : e.by === "jev"
+                                    ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-300"
+                                    : "border-border bg-card text-muted-foreground"
+                              }`}
+                            >
+                              {e.i} {e.by === "tool" ? "⚡" : e.by === "jev" ? "🧠" : "🌪️"} {e.move}
+                            </span>
+                          ))}
+                        </div>
+                        {audit.length > 300 && (
+                          <p className="mt-2 text-[10px] text-muted-foreground">
+                            showing the last 300 of {audit.length} turns
+                          </p>
+                        )}
+                      </>
+                    )}
+                  </CardContent>
+                </Card>
+              </TabsContent>
+
               <TabsContent value="about" className="mt-0 flex-1 lg:min-h-0 lg:overflow-y-auto">
                 <Card className="border-2">
                   <CardHeader className="pb-2 pt-3">
@@ -824,12 +882,14 @@ export default function Home() {
                         the 18-move alphabet is declared once, then every turn Jev
                         sees the fresh state and picks exactly one move. Nothing
                         else ever rotates the cube: if the engine is down, nothing
-                        streams; if Jev can't finish, the run ends failed and it
+                        streams; if Jev can&apos;t finish, the run ends failed and it
                         owns the miss (the one exception: the superhuman tool,
                         only when Jev itself invokes it — tagged ⚡ in the feed).
                         You get a verdict (one of five meme tiers, a 1–5 star
                         rating, exactly one roast) and every move streams turn by
-                        turn. Every run meters the tokens it burned.
+                        turn — the 📜 Audit tab keeps the full rotation log (🌪️
+                        yours, 🧠 Jev&apos;s, ⚡ its tool&apos;s). Every run meters
+                        the tokens it burned.
                       </p>
                     </div>
                     <div className="space-y-1">

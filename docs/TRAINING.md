@@ -25,7 +25,7 @@ Formally this is a deterministic, fully observable MDP:
 |---|---|
 | State `s` | facelet string + cubie arrays + `progressOf()` summary |
 | Action `a` | one single move out of the 18-move alphabet, judged every turn |
-| Transition `T(s'|s,a)` | exact, local: the toolbox executes the tool |
+| Transition `T(s'|s,a)` | exact, local: the server executes the judged move |
 | Reward `r(s,a)` | ours to design (§3) |
 | Policy `π(a|s)` | Jev's `choice` over the offered options |
 
@@ -56,7 +56,7 @@ or in a bucket — it is *our* dataset, reproducible from a seed.
 
 ## 3. Reward design
 
-Shaped reward beats sparse "solved" for a 14-action menu:
+Shaped reward beats sparse "solved" for an 18-move alphabet:
 
 ```
 r(s,a) = 10 · Δsolved_pieces(a)      # cross edges, corners, threads, LL jobs
@@ -67,11 +67,9 @@ r(s,a) = 10 · Δsolved_pieces(a)      # cross edges, corners, threads, LL jobs
 
 Two structural notes:
 
-- **`speedrun` is the anytime baseline.** It always finishes (Kociemba ≤22
-  moves) but costs one big call and skips the show. The policy must learn the
-  trade: invoke it when the remaining LBL jobs would cost more calls than
-  their progress is worth (we already do this by budget: `AGENT_BUDGET_MS`,
-  `MAX_PICKS`).
+- **`speedrun` is the anytime escape hatch.** It always finishes (Kociemba
+  ≤22 moves) but hands the show to the tool — Jev must learn when invoking it
+  is worth surrendering the spotlight.
 - **GRIND vs SWIFT cross** is a pure style/efficiency fork — the label
   generator gives exact values for both, so Jev can learn when the human-way
   grind is "worth it" for the audience vs. strictly optimal.
@@ -127,7 +125,7 @@ Track per variant of the policy:
 
 - moves streamed, engine calls, tokens, wall time
 - % episodes solved **without** `speedrun` (pure-Jev routing)
-- regressions vs the three baselines: fixed-order toolbox autopilot (the route's degraded path),
+- regressions vs the three baselines: Kociemba-only (the ⚡ tool),
   Kociemba-only, and current Jev.
 
 A policy change ships only if it beats the incumbent on the suite.

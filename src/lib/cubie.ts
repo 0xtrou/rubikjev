@@ -95,30 +95,3 @@ export function isSolved(s: CubieState): boolean {
     s.ep.every((e, i) => e === i && s.eo[i] === 0)
   );
 }
-
-// Whole-cube rotation around the U axis by r quarter turns (faces travel the
-// way U sends them: F→L→B→R). Used to retarget one slot's routine to the
-// three other equivalent slots.
-const Y_STEP: Record<string, string> = { F: "L", L: "B", B: "R", R: "F", U: "U", D: "D" };
-export function rotateY(m: Move, r: number): Move {
-  let face = m[0];
-  for (let i = 0; i < ((r % 4) + 4) % 4; i++) face = Y_STEP[face];
-  return face + m.slice(1);
-}
-
-// Per-move transition tables for the abstract (piece-level) solvers: for a
-// cubie currently at position q, to[q] is where the move sends it and the
-// flip/twist delta applies once it arrives there.
-export function edgeTransitions(): Record<string, { to: number[]; flip: number[] }> {
-  const out: Record<string, { to: number[]; flip: number[] }> = {};
-  for (const [m, t] of Object.entries(MOVES)) {
-    const to = new Array(12).fill(0);
-    const flip = new Array(12).fill(0);
-    for (let p = 0; p < 12; p++) {
-      to[t.ep[p]] = p;
-      flip[t.ep[p]] = t.eo[p];
-    }
-    out[m] = { to, flip };
-  }
-  return out;
-}

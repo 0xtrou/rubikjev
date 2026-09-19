@@ -1,7 +1,5 @@
-// Cube move engine — shared by client and server.
-// A scramble is a sequence of face turns applied to a solved cube; the exact
-// solution is its inverse. We simplify the inverse so the AI solve looks less
-// like a dumb rewind (consecutive same-face turns collapse into one).
+// Cube move alphabet — shared by client and server. Validation, stats and
+// simplification helpers; the solve itself is paved by Jev in the API route.
 
 export type Modifier = "" | "'" | "2";
 export type Move = string; // e.g. "R", "R'", "U2"
@@ -22,17 +20,6 @@ export function parseHistory(input: unknown): Move[] {
     if (!isValidMove(m)) throw new Error(`invalid move: ${JSON.stringify(m)}`);
     return m as Move;
   });
-}
-
-function flip(m: Move): Move {
-  if (m.endsWith("'")) return m[0];
-  if (m.endsWith("2")) return m;
-  return m + "'";
-}
-
-/** Exact solution for a scramble: reverse the history and invert each turn. */
-function invertHistory(history: Move[]): Move[] {
-  return [...history].reverse().map(flip);
 }
 
 function quarterTurns(m: Move): number {
@@ -73,11 +60,6 @@ export function simplify(seq: Move[]): Move[] {
     out = next;
   }
   return out;
-}
-
-/** The solution Jev will stream back for a given scramble history. */
-export function solveFor(history: Move[]): Move[] {
-  return simplify(invertHistory(history));
 }
 
 const rand = (n: number) => Math.floor(Math.random() * n);
