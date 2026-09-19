@@ -104,8 +104,9 @@ async function judgeFirst(
   history: Move[],
   state: ReturnType<typeof applyMoves>,
   facelets: string | null,
-): Promise<{ judgement: Judgement; firstMove: Move | null }> {
+): Promise<{ judgement: Judgement; firstMove: Move | null; thinkMs: number }> {
   const stats = scrambleStats(history);
+  const t0 = Date.now();
   const requestState = {
     cube: {
       facelets,
@@ -179,6 +180,7 @@ async function judgeFirst(
       live: true,
     },
     firstMove,
+    thinkMs: Date.now() - t0,
   };
 }
 
@@ -189,7 +191,8 @@ async function judgeNextMove(
   facelets: string | null,
   turn: number,
   lastMoves: Move[],
-): Promise<Move | typeof SPEEDRUN_PICK | null> {
+): Promise<{ pick: Move | typeof SPEEDRUN_PICK | null; thinkMs: number }> {
+  const t0 = Date.now();
   try {
     if (!client) throw new Error("jev-not-ready");
     const options = shuffled([...candidateMoves(lastMoves), SPEEDRUN_PICK]);
@@ -210,11 +213,12 @@ async function judgeNextMove(
       },
     });
     const picked = response.answers.next_move?.choice as Move;
-    if (picked === SPEEDRUN_PICK) return SPEEDRUN_PICK;
+    if (picked === SPEEDRUN_PICK) return { pick: SPEEDRUN_PICK, thinkMs: Date.now() - t0 };
     const cands = candidateMoves(lastMoves);
-    return cands.includes(picked) ? picked : null;
+    return { pick: cands.includes(picked) ? picked : null, thinkMs: Date.now() - t0 };
   } catch {
-    return null; // engine hiccup this turn — the loop may retry, honestly
+    // engine hiccup this turn — the loop may retry, honestly
+    return { pick: null, thinkMs: Date.now() - t0 };
   }
 }
 
@@ -296,10 +300,15 @@ export async function POST(req: NextRequest) {
 
   let judgement: Judgement;
   let firstMove: Move | typeof SPEEDRUN_PICK | null;
+  let firstThinkMs = 0;
+  let totalThinkMs = 0; // every millisecond Jev spent judging — shown live
+  let toolMs = 0;
   try {
     const first = await judgeFirst(history, state, facelets);
     judgement = first.judgement;
     firstMove = first.firstMove;
+    firstThinkMs = first.thinkMs;
+    totalThinkMs += first.thinkMs;
   } catch {
     return Response.json(
       { error: "Jev isn't ready — and nothing rotates the cube without Jev." },
@@ -307,7 +316,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const solution: { move: Move; by: "jev" | "tool" }[] = [];
+  const solution: { move: Move; by: "jev" | "tool"; thinkMs: number }[] = [];
   const milestones: Milestone[] = [];
   let superhuman = false;
   let judgedCalls = 0;
@@ -343,8 +352,14 @@ export async function POST(req: NextRequest) {
     ) {
       let pick = next;
       next = null;
-      if (!pick) {
-        pick = await judgeNextMove(state, facelets, solution.length + 1, soFar.slice(-6));
+      let thinkMs = 0;
+      if (pick) {
+        thinkMs = firstThinkMs; // the first judgment covered verdict + opening move
+      } else {
+        const judged = await judgeNextMove(state, facelets, solution.length + 1, soFar.slice(-6));
+        pick = judged.pick;
+        thinkMs = judged.thinkMs;
+        totalThinkMs += judged.thinkMs;
       }
       if (pick === SPEEDRUN_PICK) {
         // Jev's own choice to delegate — tagged honestly as tool moves.
@@ -353,12 +368,14 @@ export async function POST(req: NextRequest) {
         milestones.push({
           at: solution.length,
           emoji: "⚡",
-          feed: "JEV called the superhuman finisher — the rest is its tool, not its judgment",
+          feed: `JEV called the superhuman finisher after ${(totalThinkMs / 1000).toFixed(1)}s of thinking — the rest is its tool, not its judgment`,
         });
         try {
+          const toolT0 = Date.now();
           const tail = await solveKociembaFacelets(facelets ?? "");
+          toolMs = Date.now() - toolT0;
           for (const m of tail) {
-            solution.push({ move: m, by: "tool" });
+            solution.push({ move: m, by: "tool", thinkMs: 0 });
             state = applyMoves(state, [m]);
             soFar.push(m);
           }
@@ -377,7 +394,7 @@ export async function POST(req: NextRequest) {
       }
       judgedCalls += 1;
       judgedSinceProgress += 1;
-      solution.push({ move: pick, by: "jev" });
+      solution.push({ move: pick, by: "jev", thinkMs });
       state = applyMoves(state, [pick]);
       soFar.push(pick);
       facelets = referenceFacelets(soFar);
@@ -406,6 +423,8 @@ export async function POST(req: NextRequest) {
     tools: judgedCalls,
     superhuman,
     solved,
+    thinkMs: totalThinkMs,
+    toolMs,
     tier: judgement.tier,
     tierLabel: TIERS[judgement.tier].label,
     tierEmoji: TIERS[judgement.tier].emoji,
@@ -434,7 +453,7 @@ export async function POST(req: NextRequest) {
             const m = milestones[mi++];
             send("waypoint", { emoji: m.emoji, feed: m.feed });
           }
-          send("move", { move: solution[i].move, by: solution[i].by, i, n: solution.length });
+          send("move", { move: solution[i].move, by: solution[i].by, i, n: solution.length, thinkMs: solution[i].thinkMs });
           await sleep(perMove);
         }
         while (mi < milestones.length) {

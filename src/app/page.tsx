@@ -35,6 +35,8 @@ type Meta = {
   tools: number;
   superhuman: boolean;
   solved: boolean;
+  thinkMs: number;
+  toolMs: number;
   tier: TierKey;
   tierLabel: string;
   tierEmoji: string;
@@ -132,6 +134,8 @@ export default function Home() {
   const gambleBaseRef = useRef(0);
   const streamedRef = useRef<Move[]>([]);
   const solvedRef = useRef(true);
+  const cumThinkRef = useRef(0);
+  const [thinkSoFar, setThinkSoFar] = useState(0);
 
   const [phase, setPhase] = useState<Phase>("idle");
   const [resetKey, setResetKey] = useState(0);
@@ -144,7 +148,7 @@ export default function Home() {
   const [turn, setTurn] = useState<number | null>(null);
   const [customTurns, setCustomTurns] = useState(25);
   const [gamble, setGamble] = useState<Gamble | null>(null);
-  const [solvedStats, setSolvedStats] = useState<{ solveMs: number; moves: number; tokens: number } | null>(null);
+  const [solvedStats, setSolvedStats] = useState<{ solveMs: number; moves: number; tokens: number; thinkMs: number } | null>(null);
   const [muted, setMuted] = useState(false);
 
   const { xp, solves, badges, bench, addXp, recordSolve, awardBadge, addBench } = useGame();
@@ -289,6 +293,8 @@ export default function Home() {
     setTurn(null);
     streamedRef.current = [];
     solvedRef.current = true;
+    cumThinkRef.current = 0;
+    setThinkSoFar(0);
     say("waking Jev up… ☕");
 
     try {
@@ -328,8 +334,17 @@ export default function Home() {
           // honestly tagged — 🧠 judged by Jev, ⚡ the tool Jev chose to invoke.
           streamedRef.current.push(payload.move);
           setAudit((a) => [...a, { i: a.length + 1, move: payload.move, by: payload.by === "tool" ? "tool" : "jev" }]);
+          // Real per-move thinking time, measured server-side around the
+          // judgment call — tool moves carry none (thinkMs 0).
+          cumThinkRef.current += payload.thinkMs;
+          setThinkSoFar(cumThinkRef.current);
           setFeed((f) => [
-            { id: ++feedId, text: `${payload.by === "tool" ? "⚡" : "🧠"} ${payload.i + 1}/${payload.n} ${payload.move}` },
+            {
+              id: ++feedId,
+              text: payload.by === "tool"
+                ? `⚡ ${payload.i + 1}·${payload.move} (tool)`
+                : `🧠 ${payload.i + 1}·${payload.move} — ${(payload.thinkMs / 1000).toFixed(2)}s think`,
+            },
             ...f,
           ].slice(0, FEED_CAP));
         } else if (event === "done") {
@@ -393,8 +408,9 @@ export default function Home() {
             tokens: m.tokens,
             solveMs,
             xp: m.xp,
+            thinkMs: m.thinkMs,
           });
-          setSolvedStats({ solveMs, moves: m.solutionLength, tokens: m.tokens });
+          setSolvedStats({ solveMs, moves: m.solutionLength, tokens: m.tokens, thinkMs: m.thinkMs });
           // Reveal the sealed verdict now that the cube is visibly solved.
           setMeta(m);
           sfx.verdict();
@@ -550,8 +566,9 @@ export default function Home() {
               <CubeStage cubeRef={cubeRef} resetKey={resetKey} />
               {phase === "solving" && (
                 <div className="pointer-events-none absolute inset-x-0 top-0 p-2 z-10">
-                  <div className="mx-auto w-fit animate-pulse rounded-full bg-black/70 px-3 py-1 text-xs font-bold text-emerald-300 backdrop-blur">
-                    🧠 {hype}
+                  <div className="mx-auto w-fit rounded-full bg-black/70 px-4 py-1.5 text-xs font-bold text-emerald-300 backdrop-blur">
+                    🧠 <span className="font-mono text-base text-emerald-200">{(thinkSoFar / 1000).toFixed(1)}s</span>
+                    <span className="text-emerald-300"> thinking</span> · {hype}
                   </div>
                 </div>
               )}
@@ -562,6 +579,7 @@ export default function Home() {
                       ✅ SOLVED!
                     </div>
                     <div className="mt-1.5 flex items-center justify-center gap-3 font-mono text-[11px] text-muted-foreground">
+                      <span className="font-bold text-emerald-300">🧠 {(solvedStats.thinkMs / 1000).toFixed(1)}s think</span>
                       <span>⏱ {fmtMs(solvedStats.solveMs)}</span>
                       <span>🔄 {solvedStats.moves} turns</span>
                       <span>🎫 {solvedStats.tokens.toLocaleString()} tok</span>
@@ -756,6 +774,7 @@ export default function Home() {
                               { label: "tokens burned", value: (latest.tokens ?? 0).toLocaleString(), emoji: "🎫" },
                               { label: "run wall", value: fmtMs(latest.solveMs), emoji: "⏱️" },
                               { label: "moves", value: String(latest.moves), emoji: "🔄" },
+                              { label: "jev thinking", value: `${(latest.thinkMs / 1000).toFixed(1)}s`, emoji: "🧠" },
                             ].map((s) => (
                               <div key={s.label} className="rounded-md border bg-card px-2 py-1.5">
                                 <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{s.label}</div>
@@ -774,6 +793,7 @@ export default function Home() {
                                     <th className="pr-2 font-medium">moves</th>
                                     <th className="pr-2 font-medium">stars</th>
                                     <th className="pr-2 font-medium">tokens</th>
+                                    <th className="pr-2 font-medium">think</th>
                                     <th className="pr-2 font-medium">wall</th>
                                     <th className="font-medium">XP</th>
                                   </tr>
@@ -787,6 +807,7 @@ export default function Home() {
                                       <td className="pr-2 py-0.5">{b.moves}</td>
                                       <td className="pr-2 py-0.5">{"⭐".repeat(b.stars)}</td>
                                       <td className="pr-2 py-0.5">{(b.tokens ?? 0).toLocaleString()}</td>
+                                      <td className="pr-2 py-0.5">{(b.thinkMs / 1000).toFixed(1)}s</td>
                                       <td className="pr-2 py-0.5">{fmtMs(b.solveMs)}</td>
                                       <td className="py-0.5">+{b.xp}</td>
                                     </tr>
@@ -941,6 +962,9 @@ export default function Home() {
                           : `+${meta.xp} XP on the line`}
                     </Badge>
                     {meta.tools > 0 && <Badge variant="secondary">{meta.tools} tool calls 🧰</Badge>}
+                    <Badge variant="secondary" className="border-emerald-400/40 bg-emerald-400/10 font-bold text-emerald-300">
+                      🧠 {(meta.thinkMs / 1000).toFixed(1)}s of pure Jev thinking
+                    </Badge>
                     {meta.superhuman && <Badge variant="secondary">superhuman finish ⚡</Badge>}
                     {meta.chaos && <Badge variant="secondary">certified chaos 🌪️</Badge>}
                   </div>

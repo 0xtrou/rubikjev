@@ -10,6 +10,7 @@ export type BenchEntry = {
   stars: number;
   tokens: number;
   solveMs: number; // wall time from click to final move
+  thinkMs: number; // real measured Jev judgment time (server-side)
   xp: number;
 };
 
@@ -40,6 +41,7 @@ function sanitizeBench(raw: unknown): BenchEntry[] {
       stars: Math.min(5, Math.max(1, Math.round(num(e.stars, 3)))),
       tokens: num(e.tokens),
       solveMs: num(e.solveMs),
+      thinkMs: num(e.thinkMs),
       xp: num(e.xp),
     }))
     .slice(0, 8);
