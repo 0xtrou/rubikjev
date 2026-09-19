@@ -89,6 +89,7 @@ function spinOutcome(): { mult: number; reels: string[] } {
 }
 
 let feedId = 0;
+const FEED_CAP = 160; // the live feed keeps the whole run's stream (scrollable)
 
 const fmtMs = (ms: number) => (ms >= 1000 ? `${(ms / 1000).toFixed(2)}s` : `${Math.round(ms)}ms`);
 
@@ -129,7 +130,6 @@ export default function Home() {
   const solveStartRef = useRef(0);
   const metaRef = useRef<Meta | null>(null);
   const gambleBaseRef = useRef(0);
-  const moveTickerRef = useRef<Move[]>([]);
   const streamedRef = useRef<Move[]>([]);
   const solvedRef = useRef(true);
 
@@ -151,7 +151,7 @@ export default function Home() {
   const { rank, next } = rankFor(xp);
 
   const say = useCallback((text: string) => {
-    setFeed((f) => [{ id: ++feedId, text }, ...f].slice(0, 12));
+    setFeed((f) => [{ id: ++feedId, text }, ...f].slice(0, FEED_CAP));
   }, []);
 
   // Audio: unlock the context on the first user gesture.
@@ -287,7 +287,6 @@ export default function Home() {
     cubeRef.current.onTurn((i) => setTurn(i));
     cubeRef.current.clearPending();
     setTurn(null);
-    moveTickerRef.current = [];
     streamedRef.current = [];
     solvedRef.current = true;
     say("waking Jev up… ☕");
@@ -325,14 +324,14 @@ export default function Home() {
           // Buffered, then animated the moment the cube is free — the tick
           // fires with the actual turn (see RubiksCube.startMove).
           cubeRef.current?.feedMove(payload.move);
-          // Raw move ticker: every streamed move lands in the feed, honestly
-          // tagged — 🧠 judged by Jev, ⚡ the tool Jev chose to invoke.
+          // Raw move stream: EVERY streamed move gets its own feed line,
+          // honestly tagged — 🧠 judged by Jev, ⚡ the tool Jev chose to invoke.
           streamedRef.current.push(payload.move);
-          moveTickerRef.current.push(payload.move);
           setAudit((a) => [...a, { i: a.length + 1, move: payload.move, by: payload.by === "tool" ? "tool" : "jev" }]);
-          const tail = moveTickerRef.current.slice(-14).join(" ");
-          const tag = payload.by === "tool" ? "⚡" : "🧠";
-          setFeed((f) => [{ id: 0, text: `${tag} ${tail}` }, ...f.filter((x) => x.id !== 0)].slice(0, 12));
+          setFeed((f) => [
+            { id: ++feedId, text: `${payload.by === "tool" ? "⚡" : "🧠"} ${payload.i + 1}/${payload.n} ${payload.move}` },
+            ...f,
+          ].slice(0, FEED_CAP));
         } else if (event === "done") {
           if (!payload.solved) {
             // Jev could not finish — own it. The cube keeps its true state
