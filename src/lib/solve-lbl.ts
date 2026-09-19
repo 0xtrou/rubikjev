@@ -5,8 +5,8 @@
 // tools and the order; this code only guarantees every step is legal.
 // Nothing here ever looks at the scramble history — the solve is paved from
 // the state alone.
-import { applyMoves, edgeTransitions, isSolved, rotateY, type CubieState } from "./cubie";
-import { simplify, type Move } from "./cube";
+import { applyMoves, edgeTransitions, rotateY, type CubieState } from "./cubie";
+import type { Move } from "./cube";
 
 export type CrossStyle = "SWIFT" | "GRIND";
 
@@ -18,8 +18,6 @@ const U4 = (k: number): Move[] => {
   const n = ((k % 4) + 4) % 4;
   return n === 0 ? [] : n === 1 ? ["U"] : n === 2 ? ["U2"] : ["U'"];
 };
-
-const SLOT_NAME = ["FRONT-RIGHT", "FRONT-LEFT", "BACK-LEFT", "BACK-RIGHT"];
 
 const cornerAt = (s: CubieState, cubie: number) => s.cp.indexOf(cubie);
 const edgeAt = (s: CubieState, cubie: number) => s.ep.indexOf(cubie);
@@ -286,32 +284,3 @@ export function finishTopCorners(s: CubieState): Move[] {
   }
   throw new Error("corner finish search exhausted");
 }
-
-// ---------------------------------------------------------------------------
-// Autopilot: the full solve composed from the tools in a fixed order. Used by
-// the degraded (no-engine-key) mode and by the verification harness.
-// ---------------------------------------------------------------------------
-
-/** A genuine layer-by-layer solution for the given cube state. */
-export function solveLbl(
-  state: CubieState,
-  opts: { crossStyle: CrossStyle; firstCorner: number; cornerOrder?: number[] },
-): Move[] {
-  const out: Move[] = [];
-  let cur = state;
-  const push = (ms: Move[]) => { out.push(...ms); cur = applyMoves(cur, ms); };
-
-  push(buildCross(cur, opts.crossStyle));
-  if ([4, 5, 6, 7].some((j) => !edgeSolved(cur, j))) throw new Error("cross broken");
-  const order = opts.cornerOrder ?? [0, 1, 2, 3].map((i) => (opts.firstCorner + i) % 4);
-  for (const r of order) push(seatCorner(cur, r));
-  for (let r = 0; r < 4; r++) push(threadEdge(cur, r));
-  push(orientTopEdges(cur));
-  push(permuteTopEdges(cur));
-  push(finishTopCorners(cur));
-  if (!isSolved(cur)) throw new Error("LBL produced a non-solved sequence");
-
-  return simplify(out);
-}
-
-export { SLOT_NAME };

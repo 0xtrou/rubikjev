@@ -128,13 +128,13 @@ export default function Home() {
   const solveStartRef = useRef(0);
   const metaRef = useRef<Meta | null>(null);
   const gambleBaseRef = useRef(0);
+  const moveTickerRef = useRef<Move[]>([]);
 
   const [phase, setPhase] = useState<Phase>("idle");
   const [resetKey, setResetKey] = useState(0);
   const [preset, setPreset] = useState(1);
   const [meta, setMeta] = useState<Meta | null>(null);
   const [feed, setFeed] = useState<{ id: number; text: string }[]>([]);
-  const [scrambleLen, setScrambleLen] = useState(0);
   const [hype, setHype] = useState(HYPE_LINES[0]);
   const [tab, setTab] = useState("play");
   const [turn, setTurn] = useState<number | null>(null);
@@ -252,7 +252,6 @@ export default function Home() {
     sfx.whoosh();
     const moves = randomScramble(SCRAMBLE_PRESETS[preset].moves);
     historyRef.current = moves;
-    setScrambleLen(moves.length);
     setMeta(null);
     setTurn(null);
     setSolvedStats(null);
@@ -283,6 +282,7 @@ export default function Home() {
     cubeRef.current.onTurn((i) => setTurn(i));
     cubeRef.current.clearPending();
     setTurn(null);
+    moveTickerRef.current = [];
     say("waking Jev up… ☕");
 
     try {
@@ -318,6 +318,10 @@ export default function Home() {
           // Buffered, then animated the moment the cube is free — the tick
           // fires with the actual turn (see RubiksCube.startMove).
           cubeRef.current?.feedMove(payload.move);
+          // Raw move ticker: every judged move streams into the feed.
+          moveTickerRef.current.push(payload.move);
+          const tail = moveTickerRef.current.slice(-14).join(" ");
+          setFeed((f) => [{ id: 0, text: `🧠 ${tail}` }, ...f.filter((x) => x.id !== 0)].slice(0, 12));
         } else if (event === "done") {
           const firstEver = solves === 0;
           const scrambleMoves = historyRef.current.length;
@@ -327,7 +331,6 @@ export default function Home() {
           awardBadge("speedrun");
           if (useGame.getState().xp >= RANKS[RANKS.length - 1].minXp) awardBadge("sigma");
           historyRef.current = [];
-          setScrambleLen(0);
           // Gamble offer is staged now but only presented after the cube
           // animation settles (see onSettled).
           gambleBaseRef.current = payload.xp;
@@ -391,7 +394,7 @@ export default function Home() {
       celebrateRef.current = false;
       setPhase("ready");
     }
-  }, [locked, say, addXp, recordSolve, awardBadge, addBench, solves]);
+  }, [locked, say, recordSolve, awardBadge, addBench, solves]);
 
   const pushTurns = useCallback(
     (moves: Move[]) => {
@@ -403,7 +406,6 @@ export default function Home() {
       }
       const applied = moves.slice(0, room);
       historyRef.current.push(...applied);
-      setScrambleLen(historyRef.current.length);
       setMeta(null);
       if (phase === "solved" || phase === "idle") setPhase("ready");
       cubeRef.current.enqueue(applied, "fast");
@@ -438,7 +440,6 @@ export default function Home() {
   const reset = useCallback(() => {
     if (locked) return;
     historyRef.current = [];
-    setScrambleLen(0);
     setMeta(null);
     setTurn(null);
     setSolvedStats(null);
@@ -795,14 +796,15 @@ export default function Home() {
                     <div className="space-y-1">
                       <h3 className="font-semibold text-foreground">What happens in a run</h3>
                       <p>
-                        Jev receives your scramble and the live cube state (facelets +
-                        progress — never anything personal) and paves the solve as an
-                        agent loop: every step it picks the next job from a toolbox —
-                        seat a corner, thread an edge, go superhuman — and the server
-                        executes exactly that job before feeding the updated state back.
-                        You get a verdict (one of five meme tiers, a 1–5 star rating,
-                        exactly one roast) and every move streams turn by turn. Every
-                        run meters the tokens it burned.
+                        Jev reads only the live cube state — the 54-sticker facelet
+                        string and a progress summary, never your move history, never
+                        anything personal — and judges the solve one move at a time:
+                        the 18-move alphabet is declared once, then every turn Jev
+                        sees the fresh state and picks exactly one move. When the
+                        clock runs out, a superhuman (near-optimal) finish takes
+                        over. You get a verdict (one of five meme tiers, a 1–5 star
+                        rating, exactly one roast) and every move streams turn by
+                        turn. Every run meters the tokens it burned.
                       </p>
                     </div>
                     <div className="space-y-1">
@@ -889,7 +891,7 @@ export default function Home() {
           </CardContent>
         </Card>
 
-        <LegalChrome compact />
+        <LegalChrome />
       </div>
     </div>
   );

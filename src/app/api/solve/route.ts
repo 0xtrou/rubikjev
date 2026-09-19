@@ -1,13 +1,13 @@
 import { NextRequest } from "next/server";
 import { choice, getEngineClient, noul, score } from "@/server/jev-engine";
-import { parseHistory, scrambleStats, solveFor, type Move } from "@/lib/cube";
+import { parseHistory, scrambleStats, solveFor, FACES, type Move } from "@/lib/cube";
 import { applyMoves, solvedCube, isSolved } from "@/lib/cubie";
 import {
   buildCross, seatCorner, threadEdge, orientTopEdges, permuteTopEdges,
   finishTopCorners,
 } from "@/lib/solve-lbl";
-import { solveKociemba, referenceFacelets, referenceSolves } from "@/lib/solve-kociemba";
-import { JEV_TOOLS, ROASTS, TIERS, type TierKey, type ToolKey } from "@/lib/memes";
+import { solveKociembaFacelets, referenceFacelets, referenceSolvesFacelets } from "@/lib/solve-kociemba";
+import { ROASTS, TIERS, type TierKey } from "@/lib/memes";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -23,20 +23,28 @@ export const maxDuration = 60;
 //   is an implementation detail of this route, accessed exclusively through
 //   the server-only adapter in src/server/jev-engine.ts.
 //
-// SOLVE MODEL — Jev paves the way:
-// The engine is a judgment model: given the FULL cube reality (facelets +
-// progress) it answers structured questions, so the solve runs as an agent
-// loop. Each turn Jev sees the live state and picks the next tool ("seat the
-// front-left corner", "go superhuman"); the toolbox executes exactly that
-// piece-scoped job, and the updated reality is fed back for the next pick.
-// Every tool is verified locally and the final sequence must solve the
-// reference model or the route refuses to stream it.
+// SOLVE MODEL — Jev judges EVERY move, blind to history:
+// The engine is a judgment model: given the cube's CURRENT reality (facelets
+// + progress — never the scramble history, never the move log) it answers
+// structured questions, so the solve runs as a move-by-move agent loop:
+//   • the 18-move alphabet (U U' U2 D D' D2 … B B' B2) is declared once
+//   • every turn Jev sees the fresh cube state and judges WHICH ONE MOVE to
+//     play next; the server executes exactly that move and feeds the new
+//     state back
+//   • like a real cuber, Jev judges only what it sees — it has no idea what
+//     moves created the scramble
+//   • a wall-clock budget and stall detector hand the tail to the superhuman
+//     (Kociemba) finisher; the final sequence must solve the reference model
+//     or the route refuses to stream it
 // ---------------------------------------------------------------------------
 
 const client = getEngineClient();
 
 // Public engine signature — ours, deliberately provider-agnostic.
 const ENGINE = "jev-stream/1";
+
+// The move alphabet — Jev's complete action space, declared once.
+const ALPHABET: Move[] = FACES.flatMap((f) => [f, (f + "'") as Move, (f + "2") as Move]);
 
 // Small in-memory rate limiter (per warm instance; good enough for a demo).
 const hits = new Map<string, { count: number; resetAt: number }>();
@@ -63,35 +71,31 @@ type Judgement = {
   live: boolean;
 };
 
-type Waypoint = { tool: ToolKey; moves: Move[] };
+// A narrated moment in the stream (piece seated, phase done, speedrun handoff).
+type Milestone = { at: number; emoji: string; feed: string };
 
-// The judgment pass — call 1 of the agent loop. Everything in this function is
-// server-private. Jev rates the scramble AND picks its first tool from full
-// cube reality.
-async function judgeAndPickFirst(
+const inverseOf = (m: Move): Move => (m.endsWith("'") ? m[0] : m + "'");
+
+// Server-private judgment pass: verdict + first move in ONE call. The request
+// state carries the cube reality only — the scramble history stays here.
+async function judgeFirst(
   history: Move[],
   state: ReturnType<typeof applyMoves>,
   facelets: string | null,
-  toolOptions: ToolKey[],
-): Promise<{ judgement: Judgement; firstTool: ToolKey | null }> {
+): Promise<{ judgement: Judgement; firstMove: Move | null }> {
   const stats = scrambleStats(history);
   const requestState = {
     cube: {
       facelets,
       progress: progressOf(state),
-      note: "54-sticker URFDLB facelet string of the scrambled cube; progress lists solved jobs.",
-    },
-    scramble: {
-      moves: history,
-      totalTurns: stats.length,
-      simplifiedTurns: stats.simplifiedLength,
-      wastefulCancellations: stats.cancellations,
-      faceDistribution: stats.faceCounts,
+      note:
+        "54-sticker URFDLB facelet string of the scrambled cube. " +
+        `Your move alphabet: ${ALPHABET.join(" ")}. ` +
+        "Judge only what you see — no move history exists for you.",
     },
   };
 
-  const optionsOf = (keys: ToolKey[]) =>
-    Object.fromEntries(keys.map((k) => [k, JEV_TOOLS[k].choice]));
+  const optionsOf = (moves: Move[]) => Object.fromEntries(moves.map((m) => [m, `Play ${m}.`]));
 
   try {
     if (!client) throw new Error("no-key");
@@ -99,7 +103,7 @@ async function judgeAndPickFirst(
       state: requestState,
       questions: {
         chaos_tier: choice(
-          "Based on the scramble, what meme tier describes the player who made it?",
+          "Looking only at this scrambled cube state, what meme tier describes the player who left it like this?",
           {
             GIGACHAD_SCRAMBLE: "Monstrous, high-effort chaos. Long, devious, no mercy.",
             CERTIFIED_COOKER: "Solid, genuinely tricky scramble. The player cooked.",
@@ -110,7 +114,7 @@ async function judgeAndPickFirst(
         ),
         // Rubric indices 0..4 map to stars 1..5.
         difficulty: score(
-          "How brutally difficult is this scramble for a human speedcuber to undo without help?",
+          "How brutally difficult is this scrambled state for a human speedcuber to solve without help?",
           [
             "Trivial: a few turns, undone on sight.",
             "Easy: short scramble with obvious cancellations.",
@@ -120,12 +124,12 @@ async function judgeAndPickFirst(
           ]
         ),
         genuine_chaos: noul(
-          "Did the player create genuine disorder (many turns that do NOT undo each other)?",
-          { true: "Most turns contribute new disorder.", false: "Many turns cancel each other out." }
+          "Does this state show genuine deep disorder (most pieces far from home), or barely any disturbance?",
+          { true: "The cube is deeply wrecked.", false: "The cube is barely disturbed." }
         ),
-        first_tool: choice(
-          "You are Jev. This cube is scrambled. Using the toolbox, how do you start dismantling it?",
-          optionsOf(toolOptions)
+        first_move: choice(
+          "You are Jev. This cube is scrambled and you will dismantle it one move at a time. Which single move do you play first?",
+          optionsOf(ALPHABET)
         ),
       },
     });
@@ -136,8 +140,8 @@ async function judgeAndPickFirst(
     const tier = (a.chaos_tier?.choice ?? "MID") as TierKey;
     const stars = Math.min(5, Math.max(1, Math.round((a.difficulty?.score ?? 2) + 1)));
     const chaos = (a.genuine_chaos?.noul ?? 0.5) > 0.6;
-    const firstTool = toolOptions.includes(a.first_tool?.choice as ToolKey)
-      ? (a.first_tool?.choice as ToolKey)
+    const firstMove = ALPHABET.includes(a.first_move?.choice as Move)
+      ? (a.first_move?.choice as Move)
       : null;
     const roasts = ROASTS[tier];
     return {
@@ -149,7 +153,7 @@ async function judgeAndPickFirst(
         tokens: response.usage.input_tokens + response.usage.output_tokens,
         live: true,
       },
-      firstTool,
+      firstMove,
     };
   } catch {
     // Degraded mode: heuristic judge so the game keeps running. Still no
@@ -171,13 +175,44 @@ async function judgeAndPickFirst(
         tokens: 0,
         live: false,
       },
-      firstTool: null,
+      firstMove: null,
     };
   }
 }
 
-// Progress summary fed back to Jev between picks — the "map" part of full
-// reality. All server-private.
+// Later turns: Jev sees the fresh state and judges the next single move.
+async function judgeNextMove(
+  state: ReturnType<typeof applyMoves>,
+  facelets: string | null,
+  turn: number,
+  forbid: Move | null,
+): Promise<Move | null> {
+  try {
+    if (!client) throw new Error("no-key");
+    const options = ALPHABET.filter((m) => m !== forbid);
+    const response = await client.systemOne({
+      state: {
+        cube: {
+          facelets,
+          progress: progressOf(state),
+          note: `Live cube after turn ${turn}. Play exactly one move from your alphabet.`,
+        },
+      },
+      questions: {
+        next_move: choice(
+          "You are Jev, dismantling the cube one move per turn. Which single move do you play now?",
+          Object.fromEntries(options.map((m) => [m, `Play ${m}.`]))
+        ),
+      },
+    });
+    const picked = response.answers.next_move?.choice as Move;
+    return options.includes(picked) ? picked : null;
+  } catch {
+    return null; // any engine hiccup → the fallback takes over
+  }
+}
+
+// Progress summary fed back to Jev every turn — the "map". All server-private.
 function progressOf(state: ReturnType<typeof applyMoves>) {
   const edgeDone = (p: number) => state.ep[p] === p && state.eo[p] === 0;
   const cornerDone = (p: number) => state.cp[p] === p && state.co[p] === 0;
@@ -190,75 +225,47 @@ function progressOf(state: ReturnType<typeof applyMoves>) {
   };
 }
 
-// Which tools make sense right now — only solvable, non-redundant jobs are
-// offered to Jev.
-function availableTools(state: ReturnType<typeof applyMoves>): ToolKey[] {
-  const edgeDone = (p: number) => state.ep[p] === p && state.eo[p] === 0;
-  const cornerDone = (p: number) => state.cp[p] === p && state.co[p] === 0;
-  const crossDone = [4, 5, 6, 7].every(edgeDone);
-  const tools: ToolKey[] = [];
-  if (!crossDone) tools.push("cross:swift", "cross:grind");
-  for (let r = 0; r < 4; r++) if (!cornerDone(4 + r)) tools.push(`corner:${r}` as ToolKey);
-  if (crossDone && [4, 5, 6, 7].every((p) => cornerDone(p))) {
-    for (let r = 0; r < 4; r++) if (!edgeDone(8 + r)) tools.push(`edge:${r}` as ToolKey);
-  }
-  if (crossDone && [4, 5, 6, 7].every(cornerDone) && [8, 9, 10, 11].every(edgeDone)) {
-    if ([0, 1, 2, 3].some((i) => state.eo[i] !== 0)) tools.push("top:cross");
-    const edgesMatched = [0, 1, 2, 3].every((i) => edgeDone(i));
-    if ([0, 1, 2, 3].every((i) => state.eo[i] === 0) && !edgesMatched) tools.push("top:edges");
-    if (edgesMatched && [0, 1, 2, 3].some((i) => state.cp[i] !== i || state.co[i] !== 0)) {
-      tools.push("top:corners");
+// Milestone narration: fires when the set of solved pieces grows.
+const PIECE_LABEL: Record<string, string> = {
+  DR: "DR cross edge", DF: "DF cross edge", DL: "DL cross edge", DB: "DB cross edge",
+  DFR: "FRONT-RIGHT corner", DLF: "FRONT-LEFT corner", DBL: "BACK-LEFT corner", DRB: "BACK-RIGHT corner",
+  FR: "FRONT-RIGHT edge", FL: "FRONT-LEFT edge", BL: "BACK-LEFT edge", BR: "BACK-RIGHT edge",
+};
+function milestoneFor(before: ReturnType<typeof progressOf>, after: ReturnType<typeof progressOf>): Milestone | null {
+  const fresh = (list: string[], prev: string[]) =>
+    list.filter((p) => !prev.includes(p));
+  const newly =
+    fresh(after.crossEdges, before.crossEdges).map((p) => `${PIECE_LABEL[p]} locked 🧱`)
+    .concat(fresh(after.bottomCorners, before.bottomCorners).map((p) => `${PIECE_LABEL[p]} seated 🧩`))
+    .concat(fresh(after.middleEdges, before.middleEdges).map((p) => `${PIECE_LABEL[p]} threaded 🔗`));
+  if (after.topEdgesOriented === 4 && before.topEdgesOriented < 4) newly.push("top cross made ✚");
+  if (after.topSolved && !before.topSolved) newly.push("cube FINISHED 🎯");
+  if (newly.length === 0) return null;
+  return { at: -1, emoji: "🧠", feed: newly.slice(0, 2).join(" · ") };
+}
+
+// Degraded (no engine key) path: the toolbox autopilot — the same move stream,
+// just without Jev judging it.
+async function degradedSolve(
+  start: ReturnType<typeof applyMoves>,
+): Promise<Move[]> {
+  const solution: Move[] = [];
+  let cur = start;
+  const run = (ms: Move[]) => {
+    if (ms.length) {
+      solution.push(...ms);
+      cur = applyMoves(cur, ms);
     }
-  }
-  tools.push("speedrun");
-  return tools;
-}
-
-// Execute one Jev-chosen tool against the live state.
-async function executeTool(tool: ToolKey, state: ReturnType<typeof applyMoves>, historySoFar: Move[]): Promise<Move[]> {
-  switch (tool) {
-    case "cross:swift": return buildCross(state, "SWIFT");
-    case "cross:grind": return buildCross(state, "GRIND");
-    case "corner:0": case "corner:1": case "corner:2": case "corner:3":
-      return seatCorner(state, Number(tool.split(":")[1]));
-    case "edge:0": case "edge:1": case "edge:2": case "edge:3":
-      return threadEdge(state, Number(tool.split(":")[1]));
-    case "top:cross": return orientTopEdges(state);
-    case "top:edges": return permuteTopEdges(state);
-    case "top:corners": return finishTopCorners(state);
-    case "speedrun": return solveKociemba(historySoFar);
-    case "rewind": throw new Error("rewind is a label, not a tool");
-  }
-}
-
-// Later picks: Jev sees the updated reality and paves the next stretch.
-async function pickNext(
-  state: ReturnType<typeof applyMoves>,
-  facelets: string | null,
-  options: ToolKey[],
-): Promise<ToolKey | null> {
-  try {
-    if (!client) throw new Error("no-key");
-    const response = await client.systemOne({
-      state: {
-        cube: {
-          facelets,
-          progress: progressOf(state),
-          note: "Live cube after your last tool. Pick the next job from the toolbox.",
-        },
-      },
-      questions: {
-        next_tool: choice(
-          "You are Jev, mid-solve. Given this cube state, which tool do you deploy next?",
-          Object.fromEntries(options.map((k) => [k, JEV_TOOLS[k].choice]))
-        ),
-      },
-    });
-    const picked = response.answers.next_tool?.choice as ToolKey;
-    return options.includes(picked) ? picked : null;
-  } catch {
-    return null; // any engine hiccup → superhuman fallback takes over
-  }
+  };
+  const edgeDone = (s: ReturnType<typeof applyMoves>, p: number) => s.ep[p] === p && s.eo[p] === 0;
+  const cornerDone = (s: ReturnType<typeof applyMoves>, p: number) => s.cp[p] === p && s.co[p] === 0;
+  if (![4, 5, 6, 7].every((p) => edgeDone(cur, p))) run(buildCross(cur, "SWIFT"));
+  for (let r = 0; r < 4; r++) if (!cornerDone(cur, 4 + r)) run(seatCorner(cur, r));
+  for (let r = 0; r < 4; r++) if (!edgeDone(cur, 8 + r)) run(threadEdge(cur, r));
+  run(orientTopEdges(cur));
+  run(permuteTopEdges(cur));
+  run(finishTopCorners(cur));
+  return solution;
 }
 
 function xpFor(j: Judgement, solutionLength: number): number {
@@ -294,50 +301,96 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: "cube is already solved, genius 😎" }, { status: 400 });
   }
 
-  // --- the agent loop: Jev paves the way, the toolbox executes ----------------
+  // --- the move-by-move agent loop -------------------------------------------
+  // Jev judges ONE move per call from the live state; history stays private.
   let state = applyMoves(solvedCube(), history);
+  const startFacelets = referenceFacelets(history);
+  let facelets = startFacelets;
   const soFar: Move[] = [...history];
-  const waypoints: Waypoint[] = [];
-  const { judgement, firstTool } = await judgeAndPickFirst(
-    history, state, referenceFacelets(history), availableTools(state)
-  );
-  const agentBudgetStart = Date.now();
-  const AGENT_BUDGET_MS = 26_000;
-  const MAX_PICKS = 10;
 
-  let tool = firstTool;
-  for (let picks = 0; !isSolved(state) && picks < MAX_PICKS + 2; picks++) {
-    const options = availableTools(state);
-    if (!tool || !options.includes(tool)) tool = "speedrun";
-    if (tool !== "speedrun" && (Date.now() - agentBudgetStart > AGENT_BUDGET_MS || picks >= MAX_PICKS)) {
-      tool = "speedrun";
+  const { judgement, firstMove } = await judgeFirst(history, state, facelets);
+
+  const solution: Move[] = [];
+  const milestones: Milestone[] = [];
+  let superhuman = false;
+  let judgedCalls = 0;
+
+  const BUDGET_MS = 30_000;
+  const MAX_JUDGED_MOVES = 140;
+  const budgetStart = Date.now();
+
+  if (!judgement.live) {
+    // No engine key / engine down: toolbox autopilot, same move stream.
+    const degraded = await degradedSolve(state);
+    milestones.push({
+      at: 0,
+      emoji: "🧰",
+      feed: "no engine key — toolbox autopilot engaged",
+    });
+    solution.push(...degraded);
+    state = applyMoves(state, degraded);
+  } else {
+    let next = firstMove;
+    let lastMove: Move | null = null;
+    let stalls = 0;
+    let prevProgress = progressOf(state);
+    const noteProgress = () => {
+      const p = progressOf(state);
+      const m = milestoneFor(prevProgress, p);
+      if (m) {
+        m.at = solution.length;
+        milestones.push(m);
+      }
+      prevProgress = p;
+    };
+
+    while (!isSolved(state) && solution.length < MAX_JUDGED_MOVES && Date.now() - budgetStart < BUDGET_MS && stalls < 3) {
+      let move = next;
+      next = null;
+      if (!move) {
+        move = await judgeNextMove(state, facelets, solution.length + 1, lastMove ? inverseOf(lastMove) : null);
+      }
+      if (move && lastMove && move === inverseOf(lastMove)) {
+        continue; // instant undo — wasted turn, not a failure; do not replay it
+      }
+      if (!move || !ALPHABET.includes(move)) {
+        stalls += 1; // bad answer / engine hiccup — allow a retry or two
+        continue;
+      }
+      judgedCalls += 1;
+      solution.push(move);
+      state = applyMoves(state, [move]);
+      soFar.push(move);
+      facelets = referenceFacelets(soFar);
+      lastMove = move;
+      noteProgress();
     }
-    let moves: Move[];
-    try {
-      moves = await executeTool(tool, state, soFar);
-    } catch {
-      tool = "speedrun"; // tool blew up — superhuman takes the wheel
+
+    // Clock out: whatever Jev did not finish, the superhuman finisher does.
+    if (!isSolved(state)) {
+      superhuman = true;
+      milestones.push({
+        at: solution.length,
+        emoji: "⚡",
+        feed: "clock's out — going superhuman for the finish",
+      });
       try {
-        moves = await executeTool(tool, state, soFar);
+        const tail = await solveKociembaFacelets(facelets ?? "");
+        solution.push(...tail);
+        state = applyMoves(state, tail);
       } catch {
-        break; // even kociemba failed; the verification gate below rewinds
+        // fall through to the verification gate, which rewinds honestly
       }
     }
-    if (moves.length > 0) {
-      waypoints.push({ tool, moves });
-      state = applyMoves(state, moves);
-      soFar.push(...moves);
-    }
-    if (isSolved(state) || tool === "speedrun") break;
-    tool = await pickNext(state, referenceFacelets(soFar), availableTools(state));
   }
 
   // --- verification gate: the stream must genuinely solve the cube -----------
-  let solution: Move[] = waypoints.flatMap((w) => w.moves);
-  if (waypoints.length === 0 || !isSolved(state) || !referenceSolves(history, solution)) {
-    solution = solveFor(history);
-    waypoints.length = 0;
-    waypoints.push({ tool: "rewind", moves: solution }); // labeled honestly
+  if (!isSolved(state) || !referenceSolvesFacelets(startFacelets ?? "", solution)) {
+    solution.length = 0;
+    milestones.length = 0;
+    milestones.push({ at: 0, emoji: "⏪", feed: "got lazy — brute undo (should not happen)" });
+    solution.push(...solveFor(history));
+    superhuman = false;
   }
 
   const xp = xpFor(judgement, solution.length);
@@ -346,13 +399,12 @@ export async function POST(req: NextRequest) {
   // The client matches its animation to this exact pace.
   const perMove = Math.max(5, Math.min(90, Math.min(260, 36000 / solution.length)));
 
-  const usedSpeedrun = waypoints.some((w) => w.tool === "speedrun");
   // Curated gameplay events only — no provider, model, or timing metadata.
   const meta = {
     engine: ENGINE,
     solutionLength: solution.length,
-    tools: waypoints.length,
-    superhuman: usedSpeedrun,
+    tools: judgedCalls,
+    superhuman,
     tier: judgement.tier,
     tierLabel: TIERS[judgement.tier].label,
     tierEmoji: TIERS[judgement.tier].emoji,
@@ -375,18 +427,18 @@ export async function POST(req: NextRequest) {
         send("meta", meta);
         await sleep(600);
 
-        for (const w of waypoints) {
-          send("waypoint", {
-            tool: w.tool,
-            label: JEV_TOOLS[w.tool].label,
-            emoji: JEV_TOOLS[w.tool].emoji,
-            feed: JEV_TOOLS[w.tool].feed,
-            moves: w.moves.length,
-          });
-          for (let i = 0; i < w.moves.length; i++) {
-            send("move", { move: w.moves[i], i, n: solution.length });
-            await sleep(perMove);
+        let mi = 0;
+        for (let i = 0; i < solution.length; i++) {
+          while (mi < milestones.length && milestones[mi].at <= i) {
+            const m = milestones[mi++];
+            send("waypoint", { emoji: m.emoji, feed: m.feed });
           }
+          send("move", { move: solution[i], i, n: solution.length });
+          await sleep(perMove);
+        }
+        while (mi < milestones.length) {
+          const m = milestones[mi++];
+          send("waypoint", { emoji: m.emoji, feed: m.feed });
         }
 
         send("done", { xp, solved: true });

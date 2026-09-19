@@ -17,29 +17,29 @@ async function ensureSolver(): Promise<void> {
   await initPromise;
 }
 
-/** Near-optimal (~≤22 move) solution for the cube produced by `history`. */
-export async function solveKociemba(history: Move[]): Promise<Move[]> {
+/** Near-optimal (~≤22 move) solution for the cube state given as facelets.
+ *  The solve is paved from the state alone, never from a move history. */
+export async function solveKociembaFacelets(facelets: string): Promise<Move[]> {
   await ensureSolver();
-  const scrambled = new Cube().move(history.join(" "));
+  const scrambled = Cube.fromString(facelets);
   const solution = scrambled.solve();
   return solution ? (solution.split(" ") as Move[]) : [];
 }
 
-/** Ground truth: does history followed by solution solve the reference model? */
-export function referenceSolves(history: Move[], solution: Move[]): boolean {
-  try {
-    const c = new Cube().move(history.join(" ")).move(solution.join(" "));
-    return c.isSolved();
-  } catch {
-    return false;
-  }
-}
-
-/** Canonical 54-sticker facelet string of the scrambled cube (URFDLB order). */
+/** Canonical 54-sticker facelet string of the cube produced by `history`. */
 export function referenceFacelets(history: Move[]): string | null {
   try {
     return new Cube().move(history.join(" ")).asString();
   } catch {
     return null;
+  }
+}
+
+/** Ground truth from state: does `solution` solve the cube in `startFacelets`? */
+export function referenceSolvesFacelets(startFacelets: string, solution: Move[]): boolean {
+  try {
+    return Cube.fromString(startFacelets).move(solution.join(" ")).isSolved();
+  } catch {
+    return false;
   }
 }

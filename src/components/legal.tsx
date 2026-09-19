@@ -231,7 +231,7 @@ function ConsentBanner({ onDone }: { onDone: () => void }) {
   );
 }
 
-export default function LegalChrome({ compact = false }: { compact?: boolean }) {
+export default function LegalChrome() {
   const [consent, setConsent] = useState<"accepted" | "essential" | null>(null);
   const [mounted, setMounted] = useState(false);
 

@@ -61,37 +61,6 @@ export const HYPE_LINES = [
   "vibes checked. cube measured.",
 ];
 
-// Jev's toolbox. The agent loop offers these every step; the engine picks one
-// and the server executes it against the live cube state. Keys stream to the
-// client, which renders them from this table — no raw inference leaves home.
-export type ToolKey =
-  | "cross:swift" | "cross:grind"
-  | "corner:0" | "corner:1" | "corner:2" | "corner:3"
-  | "edge:0" | "edge:1" | "edge:2" | "edge:3"
-  | "top:cross" | "top:edges" | "top:corners"
-  | "speedrun" | "rewind";
-
-export const JEV_TOOLS: Record<
-  ToolKey,
-  { label: string; emoji: string; feed: string; choice: string }
-> = {
-  "cross:swift": { label: "SWIFT CROSS", emoji: "🧱", feed: "building the cross — the fast way", choice: "Build the bottom cross, optimally." },
-  "cross:grind": { label: "GRIND CROSS", emoji: "🧱", feed: "building the cross, quarter-turn grind", choice: "Build the bottom cross the grindy human way (quarter turns only)." },
-  "corner:0": { label: "SEAT FRONT-RIGHT CORNER", emoji: "🧩", feed: "seating the FRONT-RIGHT corner", choice: "Seat the FRONT-RIGHT bottom corner." },
-  "corner:1": { label: "SEAT FRONT-LEFT CORNER", emoji: "🧩", feed: "seating the FRONT-LEFT corner", choice: "Seat the FRONT-LEFT bottom corner." },
-  "corner:2": { label: "SEAT BACK-LEFT CORNER", emoji: "🧩", feed: "seating the BACK-LEFT corner", choice: "Seat the BACK-LEFT bottom corner." },
-  "corner:3": { label: "SEAT BACK-RIGHT CORNER", emoji: "🧩", feed: "seating the BACK-RIGHT corner", choice: "Seat the BACK-RIGHT bottom corner." },
-  "edge:0": { label: "THREAD FRONT-RIGHT EDGE", emoji: "🔗", feed: "threading the FRONT-RIGHT middle edge", choice: "Thread the FRONT-RIGHT middle edge." },
-  "edge:1": { label: "THREAD FRONT-LEFT EDGE", emoji: "🔗", feed: "threading the FRONT-LEFT middle edge", choice: "Thread the FRONT-LEFT middle edge." },
-  "edge:2": { label: "THREAD BACK-LEFT EDGE", emoji: "🔗", feed: "threading the BACK-LEFT middle edge", choice: "Thread the BACK-LEFT middle edge." },
-  "edge:3": { label: "THREAD BACK-RIGHT EDGE", emoji: "🔗", feed: "threading the BACK-RIGHT middle edge", choice: "Thread the BACK-RIGHT middle edge." },
-  "top:cross": { label: "TOP CROSS", emoji: "✚", feed: "making the top cross", choice: "Orient the top edges into a cross." },
-  "top:edges": { label: "MATCH TOP EDGES", emoji: "🔁", feed: "matching the top edges to the sides", choice: "Permute the top edges to match the side centers." },
-  "top:corners": { label: "FINISH TOP CORNERS", emoji: "🎯", feed: "finishing the top corners", choice: "Position, orient, and finish the top corners." },
-  speedrun: { label: "SPEEDRUN", emoji: "⚡", feed: "going superhuman — near-optimal finish", choice: "Go superhuman: finish the whole cube near-optimally." },
-  rewind: { label: "REWIND", emoji: "⏪", feed: "got lazy — brute undo (should not happen)", choice: "" },
-};
-
 export type Rank = { name: string; minXp: number; emoji: string };
 
 export const RANKS: Rank[] = [

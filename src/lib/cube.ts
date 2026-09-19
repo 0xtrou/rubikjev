@@ -31,7 +31,7 @@ function flip(m: Move): Move {
 }
 
 /** Exact solution for a scramble: reverse the history and invert each turn. */
-export function invertHistory(history: Move[]): Move[] {
+function invertHistory(history: Move[]): Move[] {
   return [...history].reverse().map(flip);
 }
 

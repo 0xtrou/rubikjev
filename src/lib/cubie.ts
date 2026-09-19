@@ -76,9 +76,9 @@ export function applyMove(s: CubieState, m: Move): CubieState {
   const t = MOVES[m];
   if (!t) throw new Error(`unknown move: ${m}`);
   return {
-    cp: t.cp.map((p, i) => s.cp[p]),
+    cp: t.cp.map((p) => s.cp[p]),
     co: t.co.map((o, i) => (s.co[t.cp[i]] + o) % 3),
-    ep: t.ep.map((p, i) => s.ep[p]),
+    ep: t.ep.map((p) => s.ep[p]),
     eo: t.eo.map((o, i) => (s.eo[t.ep[i]] + o) % 2),
   };
 }

@@ -2,13 +2,12 @@
 // autopilot composition, and the Kociemba speedsolve must all produce
 // sequences that solve the reference cube (cubejs) for randomized scrambles.
 // Run: pnpm check
-import Cube from "cubejs";
 import { applyMove, applyMoves, isSolved, solvedCube } from "../src/lib/cubie.ts";
 import {
   buildCross, seatCorner, threadEdge, orientTopEdges, permuteTopEdges,
-  finishTopCorners, solveLbl,
+  finishTopCorners,
 } from "../src/lib/solve-lbl.ts";
-import { solveKociemba, referenceFacelets, referenceSolves } from "../src/lib/solve-kociemba.ts";
+import { solveKociembaFacelets, referenceFacelets, referenceSolvesFacelets } from "../src/lib/solve-kociemba.ts";
 import { randomScramble } from "../src/lib/cube.ts";
 
 let fails = 0;
@@ -83,55 +82,69 @@ for (let trial = 0; trial < 120; trial++) {
   if (!isSolved(s)) fail(`finishTopCorners missed (trial ${trial})`);
 }
 
-// --- autopilot: randomized + monsters, both styles, every corner order ---
+// --- autopilot: compose the tools exactly like the route's degraded path ---
+// randomized + monsters, then verify against the reference model
 const lblStats = [];
-function checkLbl(history, opts) {
-  let solution;
+function checkAutopilot(history) {
+  const startFacelets = referenceFacelets(history);
+  let cur = applyMoves(solvedCube(), history);
+  const solution = [];
+  const run = (ms) => { solution.push(...ms); cur = applyMoves(cur, ms); };
   try {
-    solution = solveLbl(applyMoves(solvedCube(), history), opts);
+    if (![4, 5, 6, 7].every((j) => cur.ep[j] === j && cur.eo[j] === 0)) run(buildCross(cur, "SWIFT"));
+    for (let r = 0; r < 4; r++) {
+      if (!(cur.cp[4 + r] === 4 + r && cur.co[4 + r] === 0)) run(seatCorner(cur, r));
+    }
+    for (let r = 0; r < 4; r++) {
+      if (!(cur.ep[8 + r] === 8 + r && cur.eo[8 + r] === 0)) run(threadEdge(cur, r));
+    }
+    run(orientTopEdges(cur));
+    run(permuteTopEdges(cur));
+    run(finishTopCorners(cur));
   } catch (e) {
-    fail(`LBL threw for history(${history.length}): ${e.message}`);
+    fail(`autopilot threw for history(${history.length}): ${e.message}`);
     return;
   }
-  if (!referenceSolves(history, solution)) {
-    fail(`LBL solution does not solve reference (history ${history.length}, ${JSON.stringify(opts)})`);
+  if (!isSolved(cur)) {
+    fail(`autopilot non-solved state (history ${history.length})`);
+    return;
+  }
+  if (!referenceSolvesFacelets(startFacelets, solution)) {
+    fail(`autopilot solution does not solve reference (history ${history.length})`);
     return;
   }
   lblStats.push(solution.length);
 }
 for (let trial = 0; trial < 60; trial++) {
-  checkLbl(randomScramble(1 + Math.floor(Math.random() * 80)), {
-    crossStyle: trial % 2 ? "SWIFT" : "GRIND",
-    firstCorner: trial % 4,
-  });
+  checkAutopilot(randomScramble(1 + Math.floor(Math.random() * 80)));
 }
-checkLbl(["R"], { crossStyle: "SWIFT", firstCorner: 0 });
-checkLbl(["U'", "F2"], { crossStyle: "GRIND", firstCorner: 2 });
-checkLbl([], { crossStyle: "SWIFT", firstCorner: 1 });
-checkLbl(randomScramble(500), { crossStyle: "SWIFT", firstCorner: 3 });
-checkLbl(randomScramble(2000), { crossStyle: "GRIND", firstCorner: 1 });
+checkAutopilot(["R"]);
+checkAutopilot(["U'", "F2"]);
+checkAutopilot([]);
+checkAutopilot(randomScramble(500));
+checkAutopilot(randomScramble(2000));
 
 // --- Kociemba: randomized + a monster ---
 const t0 = Date.now();
-await solveKociemba(["R", "U", "R'", "U'"]);
+await solveKociembaFacelets(referenceFacelets(["R", "U", "R'", "U'"]) ?? "");
 console.log(`kociemba table init: ${Date.now() - t0}ms`);
 const kmStats = [];
 for (let trial = 0; trial < 30; trial++) {
   const h = randomScramble(1 + Math.floor(Math.random() * 80));
   let solution;
   try {
-    solution = await solveKociemba(h);
+    solution = await solveKociembaFacelets(referenceFacelets(h) ?? "");
   } catch (e) {
     fail(`kociemba threw (history ${h.length}): ${e.message}`);
     continue;
   }
-  if (!referenceSolves(h, solution)) fail(`kociemba solution does not solve reference (history ${h.length})`);
+  if (!referenceSolvesFacelets(referenceFacelets(h) ?? "", solution)) fail(`kociemba solution does not solve reference (history ${h.length})`);
   kmStats.push(solution.length);
 }
 {
   const h = randomScramble(3000);
-  const solution = await solveKociemba(h);
-  if (!referenceSolves(h, solution)) fail("kociemba monster scramble unsolved");
+  const solution = await solveKociembaFacelets(referenceFacelets(h) ?? "");
+  if (!referenceSolvesFacelets(referenceFacelets(h) ?? "", solution)) fail("kociemba monster scramble unsolved");
   kmStats.push(solution.length);
 }
 

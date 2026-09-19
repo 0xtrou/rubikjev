@@ -63,9 +63,11 @@ Plus: XP, ranks (*NPC → Mid Scrambler → Certified Cook → GIGACHAD → Sigm
 │  /api/solve  (server-only route)                            │
 │  • validates + simplifies the scramble                      │
 │  • computes the real cube state (cubie model + facelets)    │
-│  • AGENT LOOP: Jev sees full reality and picks the next     │
-│    tool (cross, seat that corner, thread that edge,         │
-│    superhuman finish…) ──►  toolbox executes exactly that   │
+│  • MOVE-BY-MOVE LOOP: Jev judges EVERY single move — the    │
+│    18-move alphabet is declared once, then it sees only the │
+│    live cube state (facelets + progress — NEVER the move    │
+│    history) each turn and plays one move; a superhuman      │
+│    (Kociemba) finisher takes the tail when the clock runs   │
 │  • judgment pass via engine adapter  ──►  JEV (AI verdict)  │
 │  • every solution verified vs a reference model before      │
 │    streaming; raw inference is never leaked                 │
