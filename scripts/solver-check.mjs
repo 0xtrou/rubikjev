@@ -3,7 +3,7 @@
 // every solution cross-checked against the independent reference model.
 // Run: pnpm check
 import { applyMove, applyMoves, isSolved, solvedCube } from "../src/lib/cubie.ts";
-import { solveKociembaFacelets, referenceFacelets, referenceSolvesFacelets } from "../src/lib/solve-kociemba.ts";
+import { solveKociembaFacelets, expandHalfTurns, referenceFacelets, referenceSolvesFacelets } from "../src/lib/solve-kociemba.ts";
 import { randomScramble } from "../src/lib/cube.ts";
 
 let fails = 0;
@@ -60,6 +60,22 @@ for (let trial = 0; trial < 30; trial++) {
 }
 
 const stat = (a) => a.length ? `min ${Math.min(...a)} / avg ${Math.round(a.reduce((x, y) => x + y) / a.length)} / max ${Math.max(...a)}` : "none";
+
+// --- ⚡ humanize: half-turn expansion keeps the solve and adds variety ---
+const expLens = [];
+for (let trial = 0; trial < 20; trial++) {
+  const h = randomScramble(20);
+  const start = referenceFacelets(h) ?? "";
+  const sol = await solveKociembaFacelets(start);
+  const expanded = expandHalfTurns(sol);
+  if (!referenceSolvesFacelets(start, expanded)) fail(`expanded tail does not solve (trial ${trial})`);
+  if (!expanded.every((m) => /^[UDLRFB]['2]?$/.test(m))) fail(`expanded move outside alphabet (trial ${trial})`);
+  if (expanded.length < sol.length) fail(`expansion shrank the tail (trial ${trial})`);
+  expLens.push(expanded.length);
+}
+console.log(`expanded ⚡ tails: ${expLens.length} checked — moves ${stat(expLens)}`);
+if (new Set(expLens).size < 3) fail(`expanded tails show no variety: ${expLens.join(",")}`);
+
 console.log(`Kociemba solutions: ${kmStats.length} checked — moves ${stat(kmStats)}`);
 console.log(fails === 0 ? "ALL SOLVER CHECKS PASS" : `${fails} FAILURES`);
 process.exit(fails === 0 ? 0 : 1);

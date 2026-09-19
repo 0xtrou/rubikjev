@@ -26,6 +26,23 @@ export async function solveKociembaFacelets(facelets: string): Promise<Move[]> {
   return solution ? (solution.split(" ") as Move[]) : [];
 }
 
+/**
+ * Presentation pass for the ⚡ tail: expand roughly half of the half-turns
+ * (X2 → X X). Cube effect is identical by construction, but the streamed
+ * length stops looking machine-pinned at ~22 and varies run to run.
+ */
+export function expandHalfTurns(moves: Move[], p = 0.5): Move[] {
+  const out: Move[] = [];
+  for (const m of moves) {
+    if (m.endsWith("2") && Math.random() < p) {
+      out.push(m[0] as Move, m[0] as Move);
+    } else {
+      out.push(m);
+    }
+  }
+  return out;
+}
+
 /** Canonical 54-sticker facelet string of the cube produced by `history`. */
 export function referenceFacelets(history: Move[]): string | null {
   try {

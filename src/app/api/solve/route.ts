@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { choice, getEngineClient, noul, score } from "@/server/jev-engine";
 import { parseHistory, scrambleStats, type Move } from "@/lib/cube";
 import { applyMoves, solvedCube, isSolved } from "@/lib/cubie";
-import { solveKociembaFacelets, referenceFacelets, referenceSolvesFacelets } from "@/lib/solve-kociemba";
+import { solveKociembaFacelets, expandHalfTurns, referenceFacelets, referenceSolvesFacelets } from "@/lib/solve-kociemba";
 import { ROASTS, TIERS, type TierKey } from "@/lib/memes";
 
 export const runtime = "nodejs";
@@ -372,7 +372,7 @@ export async function POST(req: NextRequest) {
         });
         try {
           const toolT0 = Date.now();
-          const tail = await solveKociembaFacelets(facelets ?? "");
+          const tail = expandHalfTurns(await solveKociembaFacelets(facelets ?? ""));
           toolMs = Date.now() - toolT0;
           for (const m of tail) {
             solution.push({ move: m, by: "tool", thinkMs: 0 });
